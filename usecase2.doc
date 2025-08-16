@@ -1,0 +1,621 @@
+# SD-WAN Automation Scripts Documentation
+
+## Overview
+
+This documentation covers two Python scripts designed for SD-WAN automation validation: `pre_check.py` and `post_check.py`. These scripts ensure your environment is properly configured before running SD-WAN automation playbooks and validate the results afterward.
+
+## Table of Contents
+
+- [Scripts Overview](#scripts-overview)
+- [Pre-Check Script (pre_check.py)](#pre-check-script-pre_checkpy)
+- [Post-Check Script (post_check.py)](#post-check-script-post_checkpy)
+- [Installation & Setup](#installation--setup)
+- [Usage Examples](#usage-examples)
+- [Environment Variables](#environment-variables)
+- [Output & Reports](#output--reports)
+- [Troubleshooting](#troubleshooting)
+
+---
+
+## Scripts Overview
+
+| Script | Purpose | Key Features |
+|--------|---------|--------------|
+| `pre_check.py` | Environment validation | Checks requirements, connectivity, authentication |
+| `post_check.py` | Operation validation | Validates backup integrity, statistics, performance |
+
+### Common Features
+
+- **Colored Terminal Output**: Easy-to-read status indicators
+- **Comprehensive Reporting**: JSON and text report generation
+- **Error Handling**: Graceful handling of failures and timeouts
+- **Cross-Platform Support**: Works on Windows, Linux, and macOS
+
+---
+
+## Pre-Check Script (pre_check.py)
+
+### Purpose
+Validates that all requirements are met before running SD-WAN automation playbooks.
+
+### Key Validations
+
+#### 1. **Python Environment**
+- ✅ Python version compatibility (3.6+)
+- ✅ Required Python modules availability
+
+#### 2. **Environment Variables**
+- **Required Variables:**
+  - `VMANAGE_HOST` - vManage server hostname/IP
+  - `VMANAGE_USERNAME` - Authentication username  
+  - `VMANAGE_PASSWORD` - Authentication password
+- **Optional Variables:**
+  - `VMANAGE_PORT` - vManage port (defaults to 443)
+
+#### 3. **Required Tools**
+- `ansible-playbook` - Ansible automation engine
+- `sastre` - SD-WAN configuration management tool
+- `python3` - Python interpreter
+
+#### 4. **Network Connectivity**
+- DNS resolution for vManage host
+- Port connectivity test
+- SSL certificate validation
+
+#### 5. **vManage API Access**
+- Authentication verification
+- API endpoint accessibility
+- Permission validation
+
+#### 6. **Directory Structure**
+Creates and validates required directories:
+- `backups/` - Backup storage
+- `lists/` - Configuration lists
+- `reports/` - Generated reports
+- `logs/` - Log files
+
+#### 7. **Playbook Files**
+Checks for required Ansible playbooks:
+- `usecase1.yml`
+- `sdwan_list_config.yml`
+
+### Usage
+
+```bash
+# Run all pre-checks
+python3 pre_check.py
+
+# The script automatically checks current directory
+# and creates necessary folder structure
+```
+
+### Example Output
+
+```
+==================================================
+           SD-WAN AUTOMATION PRE-CHECK
+==================================================
+Timestamp: 2025-08-16 10:30:15
+Platform: Linux 5.4.0
+Python Version: 3.8.10
+
+Checking Python Version...
+✓  PASS - Python Version: Python 3.8.10 (Compatible)
+
+Checking Environment Variables...
+✓  PASS - Environment Variable: VMANAGE_HOST: Set to: 192.168.1.100
+✓  PASS - Environment Variable: VMANAGE_USERNAME: Set to: admin
+✓  PASS - Environment Variable: VMANAGE_PASSWORD: Set to: ***PROTECTED***
+
+Checking Required Tools...
+✓  PASS - Tool: ansible-playbook: ansible-playbook 2.9.6
+✓  PASS - Tool: sastre: sastre, version 1.19
+
+Checking Network Connectivity...
+✓  PASS - DNS Resolution: Successfully resolved 192.168.1.100
+✓  PASS - Port Connectivity: Can connect to 192.168.1.100:443
+
+Checking vManage API Access...
+✓  PASS - vManage API Access: Successfully authenticated - Found 2 controllers
+
+==================================================
+                    SUMMARY
+==================================================
+✓  Passed: 12
+✗  Failed: 0
+⚠   Warnings: 1
+📊 Total Checks: 13
+
+🎉 ALL CRITICAL CHECKS PASSED!
+Your environment is ready for SD-WAN automation!
+```
+
+---
+
+## Post-Check Script (post_check.py)
+
+### Purpose
+Validates the results after running SD-WAN automation playbooks, ensuring operations completed successfully.
+
+### Supported Operations
+
+| Operation | Flag | Description |
+|-----------|------|-------------|
+| Backup | `--operation backup` | Validates backup completeness and integrity |
+| List | `--operation list` | Validates configuration list generation |
+| Both | `--operation both` | Validates both backup and list operations |
+
+### Key Validations
+
+#### 1. **Backup Completion**
+- ✅ Backup directory structure
+- ✅ Essential configuration files presence
+- ✅ File size validation
+- ✅ Archive creation and integrity
+
+#### 2. **Configuration Statistics**
+- 📊 Device templates count
+- 📊 Feature templates count  
+- 📊 Policy definitions count
+- 📊 Policy lists count
+- 📊 Configuration groups count
+
+#### 3. **File Integrity**
+- 🔍 Corruption detection
+- 📁 File accessibility verification
+- 💾 Size validation
+
+#### 4. **Archive Integrity**
+- 🗜️ Compression validation
+- 📦 Archive structure verification
+- ✅ Extraction testing
+
+#### 5. **Performance Analysis**
+- ⏱️ Operation duration
+- 📈 Performance assessment
+- 🚀 Optimization recommendations
+
+### Usage
+
+```bash
+# Check backup operation (default)
+python3 post_check.py
+
+# Check specific operation type
+python3 post_check.py --operation backup
+python3 post_check.py --operation list
+python3 post_check.py --operation both
+
+# Check specific directory
+python3 post_check.py --directory /path/to/operation/dir
+
+# Command line options
+python3 post_check.py --help
+```
+
+### Command Line Arguments
+
+| Argument | Short | Description | Default |
+|----------|-------|-------------|---------|
+| `--operation` | `-o` | Operation type (backup/list/both) | backup |
+| `--directory` | `-d` | Specific directory to check | Auto-detect latest |
+
+### Example Output
+
+```
+==================================================
+           SD-WAN AUTOMATION POST-CHECK
+           Operation: BACKUP
+==================================================
+Timestamp: 2025-08-16 11:45:30
+Platform: Linux 5.4.0
+Working Directory: /home/user/sdwan-automation
+
+📂 Analyzing: backups/2025-08-16
+
+Checking Backup Completion...
+✓  PASS - Backup Directory: Found backup directory
+✓  PASS - Essential Backup Files: All essential files present (4 files)
+✓  PASS - Backup Archive: Created successfully (2.5 MB)
+
+Analyzing Backup Statistics...
+✓  PASS - Backup Statistics: Total items backed up: 156
+  Breakdown:
+    - Device Templates: 12
+    - Feature Templates: 89
+    - Policy Definitions: 34
+    - Policy Lists: 21
+
+Checking File Integrity...
+✓  PASS - File Integrity: All 67 files passed integrity check (2.8 MB)
+
+Checking Archive Integrity...
+✓  PASS - Archive Integrity: Archive is valid (67 files, 2.5 MB)
+
+Analyzing Operation Performance...
+✓  PASS - Operation Performance: Duration: 3.2 minutes (Excellent)
+
+💡 RECOMMENDATIONS:
+  1. ✅ Consider implementing automated backup verification
+  2. 🎉 Perfect execution! Consider scheduling as regular task
+
+==================================================
+                    SUMMARY  
+==================================================
+✓  Passed: 8
+✗  Failed: 0
+⚠   Warnings: 0
+📊 Total Checks: 8
+🎯 Success Rate: 100.0%
+
+📈 Key Metrics:
+  • Total Size: 2.8 MB
+  • Total Files: 67
+  • Config Items: 156
+  • Duration: 3.2 minutes
+  • Archive Files: 67
+
+🎉 BACKUP VALIDATION SUCCESSFUL!
+Your backup operation completed successfully!
+
+📊 Detailed report saved to: postcheck_report_backup_20250816_114530.json
+📄 Summary report saved to: postcheck_summary_backup_20250816_114530.txt
+```
+
+---
+
+## Installation & Setup
+
+### Prerequisites
+
+1. **Python 3.6+**
+   ```bash
+   python3 --version
+   ```
+
+2. **Required Python Modules**
+   ```bash
+   pip3 install requests urllib3
+   ```
+
+3. **System Tools**
+   - **Ansible**: `pip3 install ansible`
+   - **Sastre**: Follow [Sastre installation guide](https://github.com/reismarcelo/sastre)
+
+### Environment Configuration
+
+Create a `.env` file or set environment variables:
+
+```bash
+# vManage Connection Details
+export VMANAGE_HOST="192.168.1.100"
+export VMANAGE_USERNAME="admin"
+export VMANAGE_PASSWORD="your_password"
+export VMANAGE_PORT="443"  # Optional, defaults to 443
+```
+
+### Directory Setup
+
+The pre-check script automatically creates required directories:
+```
+project-root/
+├── backups/          # Backup storage
+├── lists/            # Configuration lists  
+├── reports/          # Generated reports
+├── logs/             # Log files
+├── pre_check.py      # Pre-validation script
+└── post_check.py     # Post-validation script
+```
+
+---
+
+## Usage Examples
+
+### Complete Workflow
+
+```bash
+# 1. Run pre-check validation
+python3 pre_check.py
+
+# 2. If pre-check passes, run your automation
+ansible-playbook usecase1.yml
+
+# 3. Run post-check validation
+python3 post_check.py --operation backup
+```
+
+### Automated CI/CD Integration
+
+```bash
+#!/bin/bash
+# automation_pipeline.sh
+
+echo "Starting SD-WAN automation pipeline..."
+
+# Pre-check
+echo "Running pre-checks..."
+python3 pre_check.py
+if [ $? -ne 0 ]; then
+    echo "Pre-check failed. Aborting pipeline."
+    exit 1
+fi
+
+# Run automation
+echo "Running backup automation..."
+ansible-playbook usecase1.yml
+
+# Post-check
+echo "Running post-checks..."
+python3 post_check.py --operation backup
+if [ $? -eq 0 ]; then
+    echo "Pipeline completed successfully!"
+else
+    echo "Post-check detected issues. Review reports."
+    exit 1
+fi
+```
+
+### Scheduled Automation
+
+```bash
+# Crontab entry for daily backups at 2 AM
+0 2 * * * cd /path/to/sdwan-automation && python3 pre_check.py && ansible-playbook usecase1.yml && python3 post_check.py
+```
+
+---
+
+## Environment Variables
+
+### Required Variables
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `VMANAGE_HOST` | vManage server hostname or IP | `192.168.1.100` |
+| `VMANAGE_USERNAME` | Authentication username | `admin` |
+| `VMANAGE_PASSWORD` | Authentication password | `secure_password123` |
+
+### Optional Variables
+
+| Variable | Description | Default | Example |
+|----------|-------------|---------|---------|
+| `VMANAGE_PORT` | vManage HTTPS port | `443` | `8443` |
+
+### Security Best Practices
+
+1. **Never commit passwords to version control**
+2. **Use environment files with restricted permissions**:
+   ```bash
+   chmod 600 .env
+   ```
+3. **Consider using secret management tools** like HashiCorp Vault
+4. **Rotate credentials regularly**
+
+---
+
+## Output & Reports
+
+### Report Types
+
+#### Pre-Check Reports
+- **Console Output**: Real-time colored status
+- **Log File**: `precheck_results_YYYYMMDD_HHMMSS.txt`
+
+#### Post-Check Reports  
+- **Console Output**: Real-time colored status
+- **JSON Report**: `postcheck_report_OPERATION_YYYYMMDD_HHMMSS.json`
+- **Text Summary**: `postcheck_summary_OPERATION_YYYYMMDD_HHMMSS.txt`
+
+### JSON Report Structure
+
+```json
+{
+  "metadata": {
+    "operation_type": "backup",
+    "timestamp": "2025-08-16T11:45:30",
+    "operation_directory": "backups/2025-08-16",
+    "platform": "Linux 5.4.0",
+    "python_version": "3.8.10"
+  },
+  "summary": {
+    "total_checks": 8,
+    "passed": 8,
+    "failed": 0,
+    "warnings": 0,
+    "success_rate": 100.0
+  },
+  "metrics": {
+    "total_size": 2936832,
+    "total_files": 67,
+    "total_items": 156,
+    "duration_minutes": 3.2,
+    "archive_files": 67,
+    "backup_stats": {
+      "device_templates": 12,
+      "feature_templates": 89,
+      "policy_definitions": 34,
+      "policy_lists": 21,
+      "config_groups": 0
+    }
+  },
+  "detailed_results": [
+    "PASS: Backup Directory - Found backup directory",
+    "PASS: Essential Backup Files - All essential files present"
+  ],
+  "recommendations": [
+    "✅ Consider implementing automated backup verification",
+    "🎉 Perfect execution! Consider scheduling as regular task"
+  ]
+}
+```
+
+---
+
+## Troubleshooting
+
+### Common Issues & Solutions
+
+#### Pre-Check Issues
+
+**Issue**: `Tool: sastre - Tool not found`
+```bash
+# Solution: Install sastre
+pip3 install sastre
+# Or install from source
+git clone https://github.com/reismarcelo/sastre.git
+cd sastre && pip3 install .
+```
+
+**Issue**: `vManage API Access - Authentication failed`
+```bash
+# Solutions:
+# 1. Verify credentials
+echo $VMANAGE_USERNAME
+echo $VMANAGE_PASSWORD
+
+# 2. Test manual login
+curl -k -u "$VMANAGE_USERNAME:$VMANAGE_PASSWORD" \
+  "https://$VMANAGE_HOST:$VMANAGE_PORT/dataservice/system/device/controllers"
+
+# 3. Check user permissions in vManage
+```
+
+**Issue**: `SSL Certificate error`
+```bash
+# If using self-signed certificates, the script handles this
+# For custom CA certificates, add to system trust store
+```
+
+#### Post-Check Issues
+
+**Issue**: `No recent backup directory found`
+```bash
+# Solutions:
+# 1. Verify backup completed successfully
+ls -la backups/
+
+# 2. Specify directory manually
+python3 post_check.py --directory backups/2025-08-16
+
+# 3. Check backup script logs
+```
+
+**Issue**: `Archive corruption detected`
+```bash
+# Solutions:
+# 1. Re-run backup operation
+# 2. Check disk space
+df -h
+
+# 3. Check file permissions
+ls -la backups/*/archives/
+```
+
+### Performance Optimization
+
+#### For Large Environments
+
+1. **Increase Timeouts**: Modify timeout values in scripts
+2. **Run During Off-Peak**: Schedule during maintenance windows
+3. **Network Optimization**: Use dedicated management network
+4. **Parallel Processing**: Consider running operations in parallel
+
+#### Disk Space Management
+
+```bash
+# Monitor disk usage
+df -h
+
+# Clean old backups (example: keep last 30 days)
+find backups/ -type d -mtime +30 -exec rm -rf {} \;
+
+# Compress old reports
+gzip reports/*.txt
+```
+
+### Debug Mode
+
+Enable verbose output by modifying the scripts:
+
+```python
+# Add debug logging
+import logging
+logging.basicConfig(level=logging.DEBUG)
+```
+
+---
+
+## Script Exit Codes
+
+| Exit Code | Meaning | Action Required |
+|-----------|---------|-----------------|
+| `0` | Success | None - proceed |
+| `1` | Validation Failed | Fix issues before proceeding |
+
+### Integration with Monitoring
+
+```bash
+# Example monitoring integration
+python3 pre_check.py
+EXIT_CODE=$?
+if [ $EXIT_CODE -eq 0 ]; then
+    echo "Pre-check passed" | logger -t sdwan-automation
+else
+    echo "Pre-check failed" | logger -t sdwan-automation -p user.err
+    # Send alert to monitoring system
+fi
+```
+
+---
+
+## Best Practices
+
+### 1. **Regular Validation**
+- Run pre-checks before any automation
+- Run post-checks after every operation
+- Schedule regular health checks
+
+### 2. **Environment Management**
+- Use separate environments (dev/test/prod)
+- Maintain environment-specific credentials
+- Document environment configurations
+
+### 3. **Backup Strategy**
+- Regular automated backups
+- Verify backup integrity
+- Test restoration procedures
+- Maintain backup retention policy
+
+### 4. **Monitoring & Alerting**
+- Monitor script execution
+- Set up failure alerts
+- Track performance trends
+- Review reports regularly
+
+### 5. **Security**
+- Secure credential storage
+- Regular credential rotation
+- Network segmentation
+- Access logging
+
+---
+
+## Support & Maintenance
+
+### Version History
+- **v1.0**: Initial release with core validation features
+
+### Contributing
+1. Follow existing code style
+2. Add appropriate error handling
+3. Update documentation
+4. Test on multiple platforms
+
+### Support Channels
+- Review script logs and reports
+- Check environment variables
+- Verify network connectivity
+- Consult SD-WAN documentation
+
+---
+
+*Documentation generated for SD-WAN Automation Team scripts v1.0*

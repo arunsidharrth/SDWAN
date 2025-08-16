@@ -1,0 +1,242 @@
+---
+- name: Cisco SD-WAN Configuration Items Listing using Sastre
+  hosts: localhost
+  gather_facts: true
+  connection: local
+
+  vars:
+    # Use environment variables for credentials
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    
+    # Organized output structure
+    base_dir: "{{ playbook_dir }}/.."
+    list_date: "{{ ansible_date_time.date }}"
+    list_timestamp: "{{ ansible_date_time.epoch }}"
+    list_name: "amfament_prod_list_{{ list_timestamp }}"
+    
+    # Directory structure
+    daily_list_dir: "{{ base_dir }}/lists/{{ list_date }}"
+    reports_dir: "{{ daily_list_dir }}/reports"
+    data_dir: "{{ daily_list_dir }}/data"
+    
+    # Configuration item types to list
+    config_types:
+      - device_template
+      - feature_template
+      - policy_definition
+      - policy_list
+      - policy_vsmart
+      - policy_vedge
+      - policy_security
+      - configuration_group
+      - sdwan_system_profile
+      - sdwan_service_profile
+      - sdwan_transport_profile
+      - sdwan_cli_profile
+      - sdwan_sig_security_profile
+      - sdwan_application_priority_profile
+
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+        - vmanage_port
+
+    - name: Display connection information (without password)
+      debug:
+        msg: |
+          Connection Details:
+          Host: {{ vmanage_host }}
+          Username: {{ vmanage_username }}
+          Port: {{ vmanage_port }}
+          Password: [PROTECTED]
+          
+          Output Structure:
+          Date Directory: {{ daily_list_dir }}
+          Data Directory: {{ data_dir }}
+          Reports Directory: {{ reports_dir }}
+
+    - name: Create organized list directory structure
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ daily_list_dir }}"
+        - "{{ data_dir }}"
+        - "{{ reports_dir }}"
+
+    - name: Test vManage connectivity
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: connectivity_test
+      ignore_errors: true
+
+    - name: Display connectivity results
+      debug:
+        msg: |
+          Connection Status: {{ 'SUCCESS' if connectivity_test.status == 200 else 'FAILED' }}
+          Status Code: {{ connectivity_test.status | default('N/A') }}
+          Response Time: {{ connectivity_test.elapsed | default('N/A') }}s
+
+    - name: Fail if connectivity test failed
+      fail:
+        msg: "Cannot connect to production vManage at {{ vmanage_host }}"
+      when: connectivity_test.status != 200
+
+    - name: Execute Sastre list for all configuration types
+      command: >
+        sastre
+        --address {{ vmanage_host }}
+        --port {{ vmanage_port }}
+        --user {{ vmanage_username }}
+        --password "{{ vmanage_password }}"
+        --verbose
+        --timeout 300
+        list
+        {{ item }}
+      register: sastre_list_results
+      environment:
+        PYTHONHTTPSVERIFY: 0
+        REQUESTS_CA_BUNDLE: ""
+      loop: "{{ config_types }}"
+      ignore_errors: true
+
+    - name: Create individual configuration type reports
+      copy:
+        content: |
+          Configuration Type: {{ item.item }}
+          ==================================================
+          Command: sastre list {{ item.item }}
+          Execution Time: {{ item.delta }}
+          Return Code: {{ item.rc }}
+          
+          {% if item.rc == 0 %}
+          STATUS: SUCCESS
+          
+          CONFIGURATION ITEMS:
+          {{ item.stdout }}
+          {% else %}
+          STATUS: FAILED
+          
+          ERROR OUTPUT:
+          {{ item.stderr }}
+          {% endif %}
+          
+          ==================================================
+        dest: "{{ data_dir }}/{{ item.item }}_list_{{ list_timestamp }}.txt"
+      loop: "{{ sastre_list_results.results }}"
+
+    - name: Generate summary statistics
+      set_fact:
+        list_summary:
+          total_types_queried: "{{ config_types | length }}"
+          successful_queries: "{{ sastre_list_results.results | selectattr('rc', 'equalto', 0) | list | length }}"
+          failed_queries: "{{ sastre_list_results.results | selectattr('rc', 'ne', 0) | list | length }}"
+
+    - name: Create comprehensive summary report
+      copy:
+        content: |
+          Cisco SD-WAN Configuration Items List Summary
+          ============================================
+          
+          Timestamp: {{ ansible_date_time.iso8601 }}
+          Production vManage: {{ vmanage_host }}
+          Username: {{ vmanage_username }}
+          
+          Directory Structure:
+          - Base Directory: {{ base_dir }}
+          - Daily List: {{ daily_list_dir }}
+          - Data Directory: {{ data_dir }}
+          - Reports Directory: {{ reports_dir }}
+          
+          Query Results Summary:
+          - Total Configuration Types: {{ list_summary.total_types_queried }}
+          - Successful Queries: {{ list_summary.successful_queries }}
+          - Failed Queries: {{ list_summary.failed_queries }}
+          - Success Rate: {{ ((list_summary.successful_queries | float / list_summary.total_types_queried | float) * 100) | round(2) }}%
+          
+          Configuration Types Queried:
+          {% for config_type in config_types %}
+          - {{ config_type }}
+          {% endfor %}
+          
+          Individual Results:
+          {% for result in sastre_list_results.results %}
+          - {{ result.item }}: {{ 'SUCCESS' if result.rc == 0 else 'FAILED' }} ({{ result.delta }})
+          {% endfor %}
+          
+          Environment Variables Used:
+          - VMANAGE_HOST: {{ vmanage_host }}
+          - VMANAGE_USERNAME: {{ vmanage_username }}
+          - VMANAGE_PORT: {{ vmanage_port }}
+          - VMANAGE_PASSWORD: [PROTECTED]
+          
+          Output Files:
+          {% for config_type in config_types %}
+          - {{ data_dir }}/{{ config_type }}_list_{{ list_timestamp }}.txt
+          {% endfor %}
+        dest: "{{ reports_dir }}/list_summary_{{ list_timestamp }}.txt"
+
+    - name: Display execution summary
+      debug:
+        msg: |
+          ====================================
+          SD-WAN CONFIGURATION LIST COMPLETED
+          ====================================
+          
+          Summary Report: {{ reports_dir }}/list_summary_{{ list_timestamp }}.txt
+          
+          Query Statistics:
+          - Total Types: {{ list_summary.total_types_queried }}
+          - Successful: {{ list_summary.successful_queries }}
+          - Failed: {{ list_summary.failed_queries }}
+          - Success Rate: {{ ((list_summary.successful_queries | float / list_summary.total_types_queried | float) * 100) | round(2) }}%
+          
+          Individual Files Created:
+          {% for config_type in config_types %}
+          - {{ config_type }}_list_{{ list_timestamp }}.txt
+          {% endfor %}
+
+    - name: Create consolidated configuration inventory
+      shell: |
+        echo "Consolidated SD-WAN Configuration Inventory" > {{ data_dir }}/consolidated_inventory_{{ list_timestamp }}.txt
+        echo "Generated: {{ ansible_date_time.iso8601 }}" >> {{ data_dir }}/consolidated_inventory_{{ list_timestamp }}.txt
+        echo "=========================================" >> {{ data_dir }}/consolidated_inventory_{{ list_timestamp }}.txt
+        echo "" >> {{ data_dir }}/consolidated_inventory_{{ list_timestamp }}.txt
+        
+        {% for result in sastre_list_results.results %}
+        {% if result.rc == 0 %}
+        echo "{{ result.item | upper }} CONFIGURATIONS:" >> {{ data_dir }}/consolidated_inventory_{{ list_timestamp }}.txt
+        echo "{{ result.stdout }}" >> {{ data_dir }}/consolidated_inventory_{{ list_timestamp }}.txt
+        echo "" >> {{ data_dir }}/consolidated_inventory_{{ list_timestamp }}.txt
+        {% endif %}
+        {% endfor %}
+      args:
+        executable: /bin/bash
+
+    - name: Final completion message
+      debug:
+        msg: |
+          Configuration listing completed successfully!
+          
+          Files generated:
+          - Summary: {{ reports_dir }}/list_summary_{{ list_timestamp }}.txt
+          - Consolidated: {{ data_dir }}/consolidated_inventory_{{ list_timestamp }}.txt
+          - Individual type files in: {{ data_dir }}/
