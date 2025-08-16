@@ -9,7 +9,7 @@
     vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('') }}"
     vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('') }}"
     vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
-    vmanage_port: "{{ lookup('env', 'VMANAGE_PORT') | default('443') }}"
+    vmanage_port: "443"
     
     # Simple directory structure - only generated folder
     generated_dir: "{{ playbook_dir }}/generated"
@@ -167,4 +167,5 @@
           
           === CONFIGURATION GROUPS ===
           {{ configuration_groups.stdout if configuration_groups.rc == 0 else 'Not available' }}
+
         dest: "{{ generated_dir }}/consolidated_inventory_{{ list_timestamp }}.txt"
