@@ -1,0 +1,769 @@
+# SD-WAN List Configuration Playbook Documentation
+
+## Table of Contents
+
+1. [Overview](#overview)
+2. [Playbook Structure](#playbook-structure)
+3. [Environment Variables](#environment-variables)
+4. [Task Analysis](#task-analysis)
+5. [Generated Files](#generated-files)
+6. [Usage Instructions](#usage-instructions)
+7. [Error Handling](#error-handling)
+8. [Integration with Pipeline](#integration-with-pipeline)
+
+---
+
+## Overview
+
+The SD-WAN List Configuration playbook is a simplified Ansible automation script designed to extract and list all configuration items from Cisco SD-WAN environments. This playbook uses the Sastre tool to query the vManage controller and generates organized lists of various configuration components.
+
+### Key Features
+- **Simple Directory Structure**: All outputs saved to single `generated/` folder
+- **No Complex Reporting**: Streamlined code without unnecessary summaries
+- **Comprehensive Coverage**: Lists all major configuration item types
+- **Consolidated Output**: Creates both individual lists and consolidated inventory
+- **Error Handling**: Basic validation and connectivity checks
+
+### Supported Configuration Types
+- Device Templates
+- Feature Templates
+- Policy Definitions
+- Policy Lists
+- Configuration Groups
+
+---
+
+## Playbook Structure
+
+```yaml
+---
+- name: Cisco SD-WAN Configuration List using Sastre
+  hosts: localhost
+  gather_facts: true
+  connection: local
+```
+
+### Variables Section
+
+```yaml
+vars:
+  # Use environment variables for credentials
+  vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('') }}"
+  vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('') }}"
+  vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+  vmanage_port: "{{ lookup('env', 'VMANAGE_PORT') | default('443') }}"
+  
+  # Simple directory structure - only generated folder
+  generated_dir: "{{ playbook_dir }}/generated"
+  list_timestamp: "{{ ansible_date_time.epoch }}"
+```
+
+**Key Design Decisions:**
+- **Environment Variable Lookup**: Secure credential management without hardcoding
+- **Single Directory Output**: Simplified file organization in `generated/` folder
+- **Timestamp-Based Naming**: Unique file names using epoch timestamp
+- **Default Port**: Automatic fallback to port 443 if not specified
+
+---
+
+## Environment Variables
+
+### Required Variables
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `VMANAGE_HOST` | vManage controller hostname or IP address | `vmanage.company.com` or `192.168.1.100` |
+| `VMANAGE_USERNAME` | Authentication username for vManage | `admin` or `automation-user` |
+| `VMANAGE_PASSWORD` | Authentication password for vManage | `SecurePassword123!` |
+
+### Optional Variables
+
+| Variable | Description | Default | Example |
+|----------|-------------|---------|---------|
+| `VMANAGE_PORT` | HTTPS port for vManage connection | `443` | `8443` |
+
+### Setting Environment Variables
+
+**Linux/macOS:**
+```bash
+export VMANAGE_HOST="vmanage.company.com"
+export VMANAGE_USERNAME="automation-user"
+export VMANAGE_PASSWORD="SecurePassword123!"
+export VMANAGE_PORT="443"
+```
+
+**Windows PowerShell:**
+```powershell
+$env:VMANAGE_HOST="vmanage.company.com"
+$env:VMANAGE_USERNAME="automation-user" 
+$env:VMANAGE_PASSWORD="SecurePassword123!"
+$env:VMANAGE_PORT="443"
+```
+
+**GitLab CI/CD Variables:**
+- Set as masked variables in GitLab project settings
+- Use Variable type for non-sensitive data
+- Use Protected variables for production environments
+
+---
+
+## Task Analysis
+
+### Task 1: Environment Variable Validation
+
+```yaml
+- name: Validate environment variables are set
+  fail:
+    msg: "Required environment variable {{ item }} is not set"
+  when: vars[item] == ""
+  loop:
+    - vmanage_host
+    - vmanage_username
+    - vmanage_password
+```
+
+**Purpose:** Ensures all critical environment variables are set before proceeding
+
+**What it does:**
+- Loops through required variables
+- Fails immediately if any variable is empty or unset
+- Prevents execution with incomplete credentials
+- Provides clear error message indicating which variable is missing
+
+**Failure Example:**
+```
+TASK [Validate environment variables are set] *********************************
+fatal: [localhost]: FAILED! => {
+    "msg": "Required environment variable vmanage_host is not set"
+}
+```
+
+### Task 2: Generate Directory Creation
+
+```yaml
+- name: Create generated directory
+  file:
+    path: "{{ generated_dir }}"
+    state: directory
+    mode: '0755'
+```
+
+**Purpose:** Creates the output directory structure
+
+**What it does:**
+- Creates `generated/` folder in the same directory as the playbook
+- Sets proper permissions (755 - owner read/write/execute, group/others read/execute)
+- Ensures directory exists before file operations
+- Does nothing if directory already exists
+
+**Generated Structure:**
+```
+playbook-directory/
+├── sdwan_list_config.yml
+└── generated/
+    └── (output files will be created here)
+```
+
+### Task 3: vManage Connectivity Testing
+
+```yaml
+- name: Test vManage connectivity
+  uri:
+    url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+    method: GET
+    user: "{{ vmanage_username }}"
+    password: "{{ vmanage_password }}"
+    force_basic_auth: yes
+    validate_certs: false
+    timeout: 60
+    headers:
+      Content-Type: "application/json"
+  register: connectivity_test
+```
+
+**Purpose:** Validates vManage accessibility and authentication
+
+**What it does:**
+- Makes REST API call to vManage controllers endpoint
+- Uses HTTP Basic Authentication
+- Disables SSL certificate validation (for internal certificates)
+- Sets 60-second timeout
+- Stores response in `connectivity_test` variable
+
+**API Endpoint Details:**
+- **URL:** `/dataservice/system/device/controllers`
+- **Method:** GET
+- **Authentication:** Basic Auth
+- **Expected Response:** HTTP 200 with controller information
+
+### Task 4: Connectivity Failure Handling
+
+```yaml
+- name: Fail if connectivity test failed
+  fail:
+    msg: "Cannot connect to vManage at {{ vmanage_host }}"
+  when: connectivity_test.status != 200
+```
+
+**Purpose:** Stops execution if vManage is unreachable
+
+**What it does:**
+- Checks HTTP status code from connectivity test
+- Fails playbook if status is not 200 (OK)
+- Provides clear error message with vManage host information
+
+### Task 5-9: Configuration Listing Tasks
+
+Each configuration type follows the same pattern:
+
+```yaml
+- name: List [Configuration Type]
+  command: >
+    sastre
+    --address {{ vmanage_host }}
+    --port {{ vmanage_port }}
+    --user {{ vmanage_username }}
+    --password "{{ vmanage_password }}"
+    list
+    [config_type]
+  register: [config_variable]
+  environment:
+    PYTHONHTTPSVERIFY: 0
+    REQUESTS_CA_BUNDLE: ""
+
+- name: Save [Configuration Type] list
+  copy:
+    content: "{{ [config_variable].stdout }}"
+    dest: "{{ generated_dir }}/[config_type]_list_{{ list_timestamp }}.txt"
+```
+
+#### Configuration Types Processed:
+
+**1. Device Templates**
+- **Sastre Command:** `sastre list device_template`
+- **Output File:** `device_template_list_[timestamp].txt`
+- **Contains:** List of all device templates with names and IDs
+
+**2. Feature Templates**  
+- **Sastre Command:** `sastre list feature_template`
+- **Output File:** `feature_template_list_[timestamp].txt`
+- **Contains:** List of all feature templates with types and names
+
+**3. Policy Definitions**
+- **Sastre Command:** `sastre list policy_definition`
+- **Output File:** `policy_definition_list_[timestamp].txt`
+- **Contains:** List of all policy definitions with types and names
+
+**4. Policy Lists**
+- **Sastre Command:** `sastre list policy_list`
+- **Output File:** `policy_list_list_[timestamp].txt`
+- **Contains:** List of all policy lists with types and entries
+
+**5. Configuration Groups**
+- **Sastre Command:** `sastre list configuration_group`
+- **Output File:** `configuration_group_list_[timestamp].txt`
+- **Contains:** List of all configuration groups
+- **Special Handling:** Uses `ignore_errors: true` as this feature may not be available in all vManage versions
+
+#### Sastre Command Parameters:
+
+| Parameter | Value | Purpose |
+|-----------|-------|---------|
+| `--address` | `{{ vmanage_host }}` | vManage server address |
+| `--port` | `{{ vmanage_port }}` | HTTPS port (usually 443) |
+| `--user` | `{{ vmanage_username }}` | Authentication username |
+| `--password` | `{{ vmanage_password }}` | Authentication password |
+| `list` | - | Sastre list command |
+| `[config_type]` | - | Specific configuration type to list |
+
+#### Environment Variables for Sastre:
+
+```yaml
+environment:
+  PYTHONHTTPSVERIFY: 0        # Disable SSL verification
+  REQUESTS_CA_BUNDLE: ""      # Clear CA bundle for internal certificates
+```
+
+### Task 10: Consolidated Inventory Creation
+
+```yaml
+- name: Create consolidated inventory file
+  copy:
+    content: |
+      SD-WAN Configuration Inventory
+      Generated: {{ ansible_date_time.iso8601 }}
+      vManage: {{ vmanage_host }}
+      
+      === DEVICE TEMPLATES ===
+      {{ device_templates.stdout }}
+      
+      === FEATURE TEMPLATES ===
+      {{ feature_templates.stdout }}
+      
+      === POLICY DEFINITIONS ===
+      {{ policy_definitions.stdout }}
+      
+      === POLICY LISTS ===
+      {{ policy_lists.stdout }}
+      
+      === CONFIGURATION GROUPS ===
+      {{ configuration_groups.stdout if configuration_groups.rc == 0 else 'Not available' }}
+    dest: "{{ generated_dir }}/consolidated_inventory_{{ list_timestamp }}.txt"
+```
+
+**Purpose:** Creates a single file containing all configuration lists
+
+**What it does:**
+- Combines all individual configuration lists into one file
+- Adds header with generation timestamp and vManage information
+- Separates each section with clear headers
+- Handles configuration groups gracefully (shows 'Not available' if command failed)
+- Uses ISO 8601 timestamp format for standardization
+
+**File Structure Example:**
+```
+SD-WAN Configuration Inventory
+Generated: 2025-08-16T10:30:15Z
+vManage: vmanage.company.com
+
+=== DEVICE TEMPLATES ===
+[Device template listings]
+
+=== FEATURE TEMPLATES ===
+[Feature template listings]
+
+=== POLICY DEFINITIONS ===
+[Policy definition listings]
+
+=== POLICY LISTS ===
+[Policy list listings]
+
+=== CONFIGURATION GROUPS ===
+[Configuration group listings or 'Not available']
+```
+
+---
+
+## Generated Files
+
+### File Naming Convention
+
+All files use epoch timestamp for uniqueness:
+- Format: `[config_type]_list_[timestamp].txt`
+- Timestamp Example: `1692180615` (epoch seconds)
+- Full Example: `device_template_list_1692180615.txt`
+
+### Individual Configuration Files
+
+| File Name Pattern | Content Description |
+|-------------------|-------------------|
+| `device_template_list_[timestamp].txt` | List of all device templates |
+| `feature_template_list_[timestamp].txt` | List of all feature templates |
+| `policy_definition_list_[timestamp].txt` | List of all policy definitions |
+| `policy_list_[timestamp].txt` | List of all policy lists |
+| `configuration_group_list_[timestamp].txt` | List of all configuration groups |
+| `consolidated_inventory_[timestamp].txt` | Combined inventory of all configuration items |
+
+### Sample File Contents
+
+**Device Template List Example:**
+```
+Template Name                    Template ID                          Device Type
+Branch-Template-v1              12345678-1234-1234-1234-123456789012  vedge-1000
+Hub-Template-v2                 87654321-4321-4321-4321-210987654321  vedge-5000
+```
+
+**Feature Template List Example:**
+```
+Template Name                    Template Type        Template ID
+VPN0-Interface                  cisco_vpn_interface  11111111-1111-1111-1111-111111111111
+System-Template                 cisco_system         22222222-2222-2222-2222-222222222222
+```
+
+### File Size Considerations
+
+- **Individual Files:** Typically 1KB - 50KB depending on environment size
+- **Consolidated File:** Usually 5KB - 200KB for complete inventory
+- **Total Storage:** Minimal footprint, suitable for version control
+
+---
+
+## Usage Instructions
+
+### Prerequisites
+
+1. **Ansible Installation:**
+   ```bash
+   pip install ansible
+   ```
+
+2. **Sastre Installation:**
+   ```bash
+   pip install sastre
+   ```
+
+3. **Environment Variables:** Set required vManage credentials
+
+4. **Network Access:** Ensure connectivity to vManage controller
+
+### Manual Execution
+
+**Step 1: Set Environment Variables**
+```bash
+export VMANAGE_HOST="your-vmanage.company.com"
+export VMANAGE_USERNAME="your-username"
+export VMANAGE_PASSWORD="your-password"
+export VMANAGE_PORT="443"
+```
+
+**Step 2: Run Playbook**
+```bash
+ansible-playbook sdwan_list_config.yml
+```
+
+**Step 3: Verify Results**
+```bash
+ls -la generated/
+```
+
+### Expected Output During Execution
+
+```
+PLAY [Cisco SD-WAN Configuration List using Sastre] ***************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [localhost]
+
+TASK [Validate environment variables are set] *********************************
+ok: [localhost] => (item=vmanage_host)
+ok: [localhost] => (item=vmanage_username)
+ok: [localhost] => (item=vmanage_password)
+
+TASK [Create generated directory] **********************************************
+ok: [localhost]
+
+TASK [Test vManage connectivity] ***********************************************
+ok: [localhost]
+
+TASK [Fail if connectivity test failed] ***************************************
+skipping: [localhost]
+
+TASK [List Device Templates] ***************************************************
+changed: [localhost]
+
+TASK [Save Device Templates list] **********************************************
+changed: [localhost]
+
+TASK [List Feature Templates] **************************************************
+changed: [localhost]
+
+TASK [Save Feature Templates list] *********************************************
+changed: [localhost]
+
+TASK [List Policy Definitions] *************************************************
+changed: [localhost]
+
+TASK [Save Policy Definitions list] ********************************************
+changed: [localhost]
+
+TASK [List Policy Lists] *******************************************************
+changed: [localhost]
+
+TASK [Save Policy Lists] *******************************************************
+changed: [localhost]
+
+TASK [List Configuration Groups] ***********************************************
+changed: [localhost]
+
+TASK [Save Configuration Groups list] ******************************************
+changed: [localhost]
+
+TASK [Create consolidated inventory file] **************************************
+changed: [localhost]
+
+PLAY RECAP *********************************************************************
+localhost                  : ok=14   changed=11   unreachable=0    failed=0
+```
+
+### Automation Integration
+
+**GitLab CI/CD Integration:**
+```yaml
+sdwan-list-config:
+  stage: inventory
+  script:
+    - ansible-playbook sdwan_list_config.yml
+  artifacts:
+    paths:
+      - generated/
+    expire_in: 30 days
+  only:
+    - schedules
+```
+
+**Cron Job Example:**
+```bash
+# Daily configuration inventory at 6 AM
+0 6 * * * cd /path/to/playbook && ansible-playbook sdwan_list_config.yml
+```
+
+---
+
+## Error Handling
+
+### Common Error Scenarios
+
+#### 1. Missing Environment Variables
+
+**Error Message:**
+```
+TASK [Validate environment variables are set] *********************************
+fatal: [localhost]: FAILED! => {
+    "msg": "Required environment variable vmanage_host is not set"
+}
+```
+
+**Solution:**
+- Verify all required environment variables are set
+- Check variable names for typos
+- Ensure variables are exported in current shell session
+
+#### 2. vManage Connectivity Issues
+
+**Error Message:**
+```
+TASK [Test vManage connectivity] ***********************************************
+fatal: [localhost]: FAILED! => {
+    "msg": "Cannot connect to vManage at vmanage.company.com"
+}
+```
+
+**Troubleshooting Steps:**
+1. **Network Connectivity:**
+   ```bash
+   ping vmanage.company.com
+   telnet vmanage.company.com 443
+   ```
+
+2. **DNS Resolution:**
+   ```bash
+   nslookup vmanage.company.com
+   ```
+
+3. **Firewall/Proxy Issues:**
+   - Check corporate firewall rules
+   - Verify proxy settings if applicable
+
+4. **SSL/TLS Issues:**
+   - Verify certificate validity
+   - Check if custom CA certificates are needed
+
+#### 3. Authentication Failures
+
+**Error Symptoms:**
+- HTTP 401 (Unauthorized) responses
+- HTTP 403 (Forbidden) responses
+
+**Solutions:**
+1. **Verify Credentials:**
+   - Test manual login to vManage web interface
+   - Check for account lockouts or password expiration
+
+2. **Check User Permissions:**
+   - Ensure user has read access to configuration data
+   - Verify user group memberships in vManage
+
+3. **API Access:**
+   - Confirm API access is enabled for the user
+   - Check rate limiting settings
+
+#### 4. Sastre Tool Issues
+
+**Error Message:**
+```
+TASK [List Device Templates] ***************************************************
+fatal: [localhost]: FAILED! => {
+    "msg": "sastre: command not found"
+}
+```
+
+**Solution:**
+```bash
+# Install Sastre
+pip install sastre
+
+# Verify installation
+sastre --version
+
+# Check PATH
+which sastre
+```
+
+#### 5. Permission Issues
+
+**Error Message:**
+```
+TASK [Create generated directory] **********************************************
+fatal: [localhost]: FAILED! => {
+    "msg": "Permission denied"
+}
+```
+
+**Solutions:**
+- Check directory permissions: `ls -ld .`
+- Ensure write access to playbook directory
+- Run with appropriate user permissions
+
+### Error Recovery Strategies
+
+#### 1. Partial Failure Handling
+
+The playbook includes `ignore_errors: true` for configuration groups since this feature may not be available in all vManage versions.
+
+#### 2. Retry Logic
+
+For transient network issues, add retry logic:
+```yaml
+- name: List Device Templates
+  command: >
+    sastre --address {{ vmanage_host }} list device_template
+  register: device_templates
+  retries: 3
+  delay: 30
+```
+
+#### 3. Graceful Degradation
+
+The consolidated inventory handles missing data gracefully:
+```yaml
+{{ configuration_groups.stdout if configuration_groups.rc == 0 else 'Not available' }}
+```
+
+---
+
+## Integration with Pipeline
+
+### GitLab CI/CD Integration
+
+**Pipeline Configuration (.gitlab-ci.yml):**
+```yaml
+variables:
+  VMANAGE_HOST: "vmanage.company.com"
+  VMANAGE_USERNAME: "automation-user"
+  # VMANAGE_PASSWORD set as protected variable
+
+stages:
+  - inventory
+
+sdwan-list-config:
+  stage: inventory
+  image: python:3.9
+  before_script:
+    - pip install ansible sastre
+  script:
+    - ansible-playbook sdwan_list_config.yml
+  artifacts:
+    paths:
+      - generated/
+    expire_in: 30 days
+    reports:
+      junit: generated/consolidated_inventory_*.txt
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+```
+
+### Manual Pipeline Execution
+
+**Steps for Manual Trigger:**
+1. Navigate to GitLab project
+2. Go to **CI/CD > Pipelines**
+3. Click **Run Pipeline**
+4. Select branch (usually main/master)
+5. Click **Run Pipeline**
+
+### Scheduled Execution
+
+**GitLab Schedule Configuration:**
+1. Go to **CI/CD > Schedules**
+2. Click **New Schedule**
+3. Set description: "Daily SD-WAN Configuration Inventory"
+4. Set interval: `0 6 * * *` (daily at 6 AM)
+5. Set target branch
+6. Save schedule
+
+### Artifact Management
+
+**Generated Artifacts:**
+- **Location:** `generated/` folder
+- **Retention:** 30 days (configurable)
+- **Access:** Available through GitLab UI or API
+- **Format:** Plain text files, easily readable
+
+**Accessing Artifacts:**
+1. Go to **CI/CD > Pipelines**
+2. Click on pipeline run
+3. Click on job name
+4. Download artifacts from right sidebar
+
+### Integration with Other Tools
+
+**Webhook Integration:**
+```yaml
+after_script:
+  - |
+    curl -X POST https://monitoring.company.com/webhook \
+    -H "Content-Type: application/json" \
+    -d '{"status": "completed", "files": "'$(ls generated/ | wc -l)'"}'
+```
+
+**Slack Notification:**
+```yaml
+after_script:
+  - |
+    if [ $? -eq 0 ]; then
+      curl -X POST -H 'Content-type: application/json' \
+      --data '{"text":"SD-WAN inventory completed successfully"}' \
+      $SLACK_WEBHOOK_URL
+    fi
+```
+
+---
+
+## Best Practices
+
+### 1. Security
+- **Never hardcode credentials** in playbooks
+- **Use GitLab protected variables** for sensitive data
+- **Rotate credentials regularly**
+- **Limit API user permissions** to read-only where possible
+
+### 2. Maintenance
+- **Regular execution** to track configuration changes
+- **Version control** all generated files for change tracking
+- **Monitor execution** for failures or performance issues
+- **Archive old files** to manage storage
+
+### 3. Documentation
+- **Document environment-specific settings**
+- **Maintain change logs** for playbook modifications  
+- **Keep examples updated** with actual environment data
+- **Document troubleshooting procedures**
+
+### 4. Performance
+- **Schedule during off-peak hours** to minimize impact
+- **Monitor execution time** for performance degradation
+- **Consider parallel execution** for large environments
+- **Implement caching** where appropriate
+
+---
+
+## Conclusion
+
+This SD-WAN List Configuration playbook provides a simple, effective method for inventorying Cisco SD-WAN environments. Its streamlined design focuses on core functionality while maintaining reliability and ease of use. The single-directory output structure and minimal reporting make it ideal for integration with automated pipelines and version control systems.
+
+The playbook serves as a foundation for configuration management, change tracking, and compliance reporting in SD-WAN environments. Its modular design allows for easy extension to support additional configuration types or custom reporting requirements.
+
+---
+
+*Documentation Version 1.0 - SD-WAN Automation Team*

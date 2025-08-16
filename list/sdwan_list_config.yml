@@ -1,0 +1,170 @@
+---
+- name: Cisco SD-WAN Configuration List using Sastre
+  hosts: localhost
+  gather_facts: true
+  connection: local
+  
+  vars:
+    # Use environment variables for credentials
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "{{ lookup('env', 'VMANAGE_PORT') | default('443') }}"
+    
+    # Simple directory structure - only generated folder
+    generated_dir: "{{ playbook_dir }}/generated"
+    list_timestamp: "{{ ansible_date_time.epoch }}"
+    
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+
+    - name: Create generated directory
+      file:
+        path: "{{ generated_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Test vManage connectivity
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: connectivity_test
+
+    - name: Fail if connectivity test failed
+      fail:
+        msg: "Cannot connect to vManage at {{ vmanage_host }}"
+      when: connectivity_test.status != 200
+
+    - name: List Device Templates
+      command: >
+        sastre
+        --address {{ vmanage_host }}
+        --port {{ vmanage_port }}
+        --user {{ vmanage_username }}
+        --password "{{ vmanage_password }}"
+        list
+        device_template
+      register: device_templates
+      environment:
+        PYTHONHTTPSVERIFY: 0
+        REQUESTS_CA_BUNDLE: ""
+
+    - name: Save Device Templates list
+      copy:
+        content: "{{ device_templates.stdout }}"
+        dest: "{{ generated_dir }}/device_template_list_{{ list_timestamp }}.txt"
+
+    - name: List Feature Templates
+      command: >
+        sastre
+        --address {{ vmanage_host }}
+        --port {{ vmanage_port }}
+        --user {{ vmanage_username }}
+        --password "{{ vmanage_password }}"
+        list
+        feature_template
+      register: feature_templates
+      environment:
+        PYTHONHTTPSVERIFY: 0
+        REQUESTS_CA_BUNDLE: ""
+
+    - name: Save Feature Templates list
+      copy:
+        content: "{{ feature_templates.stdout }}"
+        dest: "{{ generated_dir }}/feature_template_list_{{ list_timestamp }}.txt"
+
+    - name: List Policy Definitions
+      command: >
+        sastre
+        --address {{ vmanage_host }}
+        --port {{ vmanage_port }}
+        --user {{ vmanage_username }}
+        --password "{{ vmanage_password }}"
+        list
+        policy_definition
+      register: policy_definitions
+      environment:
+        PYTHONHTTPSVERIFY: 0
+        REQUESTS_CA_BUNDLE: ""
+
+    - name: Save Policy Definitions list
+      copy:
+        content: "{{ policy_definitions.stdout }}"
+        dest: "{{ generated_dir }}/policy_definition_list_{{ list_timestamp }}.txt"
+
+    - name: List Policy Lists
+      command: >
+        sastre
+        --address {{ vmanage_host }}
+        --port {{ vmanage_port }}
+        --user {{ vmanage_username }}
+        --password "{{ vmanage_password }}"
+        list
+        policy_list
+      register: policy_lists
+      environment:
+        PYTHONHTTPSVERIFY: 0
+        REQUESTS_CA_BUNDLE: ""
+
+    - name: Save Policy Lists
+      copy:
+        content: "{{ policy_lists.stdout }}"
+        dest: "{{ generated_dir }}/policy_list_{{ list_timestamp }}.txt"
+
+    - name: List Configuration Groups
+      command: >
+        sastre
+        --address {{ vmanage_host }}
+        --port {{ vmanage_port }}
+        --user {{ vmanage_username }}
+        --password "{{ vmanage_password }}"
+        list
+        configuration_group
+      register: configuration_groups
+      environment:
+        PYTHONHTTPSVERIFY: 0
+        REQUESTS_CA_BUNDLE: ""
+      ignore_errors: true
+
+    - name: Save Configuration Groups list
+      copy:
+        content: "{{ configuration_groups.stdout }}"
+        dest: "{{ generated_dir }}/configuration_group_list_{{ list_timestamp }}.txt"
+      when: configuration_groups.rc == 0
+
+    - name: Create consolidated inventory file
+      copy:
+        content: |
+          SD-WAN Configuration Inventory
+          Generated: {{ ansible_date_time.iso8601 }}
+          vManage: {{ vmanage_host }}
+          
+          === DEVICE TEMPLATES ===
+          {{ device_templates.stdout }}
+          
+          === FEATURE TEMPLATES ===
+          {{ feature_templates.stdout }}
+          
+          === POLICY DEFINITIONS ===
+          {{ policy_definitions.stdout }}
+          
+          === POLICY LISTS ===
+          {{ policy_lists.stdout }}
+          
+          === CONFIGURATION GROUPS ===
+          {{ configuration_groups.stdout if configuration_groups.rc == 0 else 'Not available' }}
+        dest: "{{ generated_dir }}/consolidated_inventory_{{ list_timestamp }}.txt"
