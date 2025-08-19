@@ -1,1 +1,141 @@
+---
+- name: SD-WAN API Readiness Check
+  hosts: localhost
+  gather_facts: true
+  connection: local
+  
+  vars:
+    # Use environment variables for credentials
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    
+    # Simple directory structure
+    generated_dir: "{{ playbook_dir }}/../generated"
+    
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+        - vmanage_port
 
+    - name: Create generated directory
+      file:
+        path: "{{ generated_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Check API authentication endpoint
+      uri:
+        url: "https://{{ vmanage_host }}/j_security_check"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          j_username: "{{ vmanage_username }}"
+          j_password: "{{ vmanage_password }}"
+        validate_certs: false
+        timeout: 30
+        follow_redirects: none
+        status_code: [200, 302]
+      register: auth_check
+      ignore_errors: true
+
+    - name: Check system status endpoint
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 30
+        headers:
+          Content-Type: "application/json"
+      register: system_status
+      ignore_errors: true
+
+    - name: Check device inventory endpoint
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 30
+        headers:
+          Content-Type: "application/json"
+      register: device_inventory
+      ignore_errors: true
+
+    - name: Check template endpoint
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/device"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 30
+        headers:
+          Content-Type: "application/json"
+      register: template_check
+      ignore_errors: true
+
+    - name: Check policy endpoint
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/vedge"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 30
+        headers:
+          Content-Type: "application/json"
+      register: policy_check
+      ignore_errors: true
+
+    - name: Determine overall API readiness
+      set_fact:
+        api_ready: "{{ 
+          (auth_check.status in [200, 302]) and
+          (system_status.status == 200) and
+          (device_inventory.status == 200) and
+          (template_check.status == 200) and
+          (policy_check.status == 200)
+        }}"
+
+    - name: Save API readiness results
+      copy:
+        content: |
+          API Readiness Check Results
+          ==========================
+          
+          vManage Host: {{ vmanage_host }}
+          Overall API Ready: {{ api_ready | upper }}
+          
+          Endpoint Test Results:
+          - Authentication: {{ 'PASS' if auth_check.status in [200, 302] else 'FAIL' }} (Status: {{ auth_check.status | default('N/A') }})
+          - System Status: {{ 'PASS' if system_status.status == 200 else 'FAIL' }} (Status: {{ system_status.status | default('N/A') }})
+          - Device Inventory: {{ 'PASS' if device_inventory.status == 200 else 'FAIL' }} (Status: {{ device_inventory.status | default('N/A') }})
+          - Templates: {{ 'PASS' if template_check.status == 200 else 'FAIL' }} (Status: {{ template_check.status | default('N/A') }})
+          - Policies: {{ 'PASS' if policy_check.status == 200 else 'FAIL' }} (Status: {{ policy_check.status | default('N/A') }})
+          
+          Check completed: {{ ansible_date_time.iso8601 }}
+        dest: "{{ generated_dir }}/api_ready_results.txt"
+
+    - name: Display API readiness status
+      debug:
+        msg: |
+          API Readiness Check Complete
+          ===========================
+          vManage: {{ vmanage_host }}
+          API Ready: {{ api_ready | upper }}
+          Results saved to: {{ generated_dir }}/api_ready_results.txt
