@@ -12,8 +12,7 @@
     vmanage_port: "443"
     
     # Simple directory structure
-    generated_dir: "{{ playbook_dir }}/generated"
-    report_timestamp: "{{ ansible_date_time.epoch }}"
+    generated_dir: "{{ playbook_dir }}/../generated"
     
   tasks:
     - name: Validate environment variables are set
@@ -59,7 +58,7 @@
         --password "{{ vmanage_password }}"
         --verbose
         report
-        --workdir {{ generated_dir }}/device_templates_{{ report_timestamp }}
+        --workdir {{ generated_dir }}/device_templates
         device_template
       environment:
         PYTHONHTTPSVERIFY: 0
@@ -76,7 +75,7 @@
         --password "{{ vmanage_password }}"
         --verbose
         report
-        --workdir {{ generated_dir }}/feature_templates_{{ report_timestamp }}
+        --workdir {{ generated_dir }}/feature_templates
         feature_template
       environment:
         PYTHONHTTPSVERIFY: 0
@@ -93,7 +92,7 @@
         --password "{{ vmanage_password }}"
         --verbose
         report
-        --workdir {{ generated_dir }}/policy_definitions_{{ report_timestamp }}
+        --workdir {{ generated_dir }}/policy_definitions
         policy_definition
       environment:
         PYTHONHTTPSVERIFY: 0
@@ -110,7 +109,7 @@
         --password "{{ vmanage_password }}"
         --verbose
         report
-        --workdir {{ generated_dir }}/policy_lists_{{ report_timestamp }}
+        --workdir {{ generated_dir }}/policy_lists
         policy_list
       environment:
         PYTHONHTTPSVERIFY: 0
@@ -127,7 +126,7 @@
         --password "{{ vmanage_password }}"
         --verbose
         report
-        --workdir {{ generated_dir }}/config_groups_{{ report_timestamp }}
+        --workdir {{ generated_dir }}/config_groups
         config_group
       environment:
         PYTHONHTTPSVERIFY: 0
@@ -144,7 +143,7 @@
         --password "{{ vmanage_password }}"
         --verbose
         report
-        --workdir {{ generated_dir }}/all_items_{{ report_timestamp }}
+        --workdir {{ generated_dir }}/all_items
         all
       environment:
         PYTHONHTTPSVERIFY: 0
