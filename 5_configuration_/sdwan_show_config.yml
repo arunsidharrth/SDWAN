@@ -1,1 +1,249 @@
+---
+- name: Cisco SD-WAN Show Configuration Details using Sastre
+  hosts: localhost
+  gather_facts: true
+  connection: local
 
+  vars:
+    # Use environment variables for credentials
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    
+    # Simple directory structure
+    generated_dir: "{{ playbook_dir }}/../generated"
+    show_config_dir: "{{ generated_dir }}/show_config"
+
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+        - vmanage_port
+
+    - name: Display connection information (without password)
+      debug:
+        msg: |
+          Connection Details:
+          Host: {{ vmanage_host }}
+          Username: {{ vmanage_username }}
+          Port: {{ vmanage_port }}
+          Password: [PROTECTED]
+          Output Directory: {{ show_config_dir }}
+
+    - name: Create generated directory structure
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ generated_dir }}"
+        - "{{ show_config_dir }}"
+
+    - name: Test vManage connectivity
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: connectivity_test
+      ignore_errors: true
+
+    - name: Display connectivity results
+      debug:
+        msg: |
+          Connection Status: {{ 'SUCCESS' if connectivity_test.status == 200 else 'FAILED' }}
+          Status Code: {{ connectivity_test.status | default('N/A') }}
+          Response Time: {{ connectivity_test.elapsed | default('N/A') }}s
+
+    - name: Fail if connectivity test failed
+      fail:
+        msg: "Cannot connect to production vManage at {{ vmanage_host }}"
+      when: connectivity_test.status != 200
+
+    - name: Show device templates configuration details
+      command: >
+        sastre
+        --address {{ vmanage_host }}
+        --port {{ vmanage_port }}
+        --user {{ vmanage_username }}
+        --password "{{ vmanage_password }}"
+        --verbose
+        --timeout 300
+        show
+        --workdir {{ show_config_dir }}
+        device_template
+      register: device_templates_show
+      environment:
+        PYTHONHTTPSVERIFY: 0
+        REQUESTS_CA_BUNDLE: ""
+      ignore_errors: true
+
+    - name: Show feature templates configuration details
+      command: >
+        sastre
+        --address {{ vmanage_host }}
+        --port {{ vmanage_port }}
+        --user {{ vmanage_username }}
+        --password "{{ vmanage_password }}"
+        --verbose
+        --timeout 300
+        show
+        --workdir {{ show_config_dir }}
+        feature_template
+      register: feature_templates_show
+      environment:
+        PYTHONHTTPSVERIFY: 0
+        REQUESTS_CA_BUNDLE: ""
+      ignore_errors: true
+
+    - name: Show policy definitions configuration details
+      command: >
+        sastre
+        --address {{ vmanage_host }}
+        --port {{ vmanage_port }}
+        --user {{ vmanage_username }}
+        --password "{{ vmanage_password }}"
+        --verbose
+        --timeout 300
+        show
+        --workdir {{ show_config_dir }}
+        policy_definition
+      register: policy_definitions_show
+      environment:
+        PYTHONHTTPSVERIFY: 0
+        REQUESTS_CA_BUNDLE: ""
+      ignore_errors: true
+
+    - name: Show policy lists configuration details
+      command: >
+        sastre
+        --address {{ vmanage_host }}
+        --port {{ vmanage_port }}
+        --user {{ vmanage_username }}
+        --password "{{ vmanage_password }}"
+        --verbose
+        --timeout 300
+        show
+        --workdir {{ show_config_dir }}
+        policy_list
+      register: policy_lists_show
+      environment:
+        PYTHONHTTPSVERIFY: 0
+        REQUESTS_CA_BUNDLE: ""
+      ignore_errors: true
+
+    - name: Show configuration groups details
+      command: >
+        sastre
+        --address {{ vmanage_host }}
+        --port {{ vmanage_port }}
+        --user {{ vmanage_username }}
+        --password "{{ vmanage_password }}"
+        --verbose
+        --timeout 300
+        show
+        --workdir {{ show_config_dir }}
+        configuration_group
+      register: config_groups_show
+      environment:
+        PYTHONHTTPSVERIFY: 0
+        REQUESTS_CA_BUNDLE: ""
+      ignore_errors: true
+
+    - name: Save device templates output to file
+      copy:
+        content: |
+          Cisco SD-WAN Device Templates Configuration Details
+          ==================================================
+          Execution Time: {{ ansible_date_time.iso8601 }}
+          vManage Host: {{ vmanage_host }}
+          
+          {{ device_templates_show.stdout }}
+          {{ device_templates_show.stderr }}
+        dest: "{{ show_config_dir }}/device_templates_config.txt"
+      when: device_templates_show is defined
+
+    - name: Save feature templates output to file
+      copy:
+        content: |
+          Cisco SD-WAN Feature Templates Configuration Details
+          ===================================================
+          Execution Time: {{ ansible_date_time.iso8601 }}
+          vManage Host: {{ vmanage_host }}
+          
+          {{ feature_templates_show.stdout }}
+          {{ feature_templates_show.stderr }}
+        dest: "{{ show_config_dir }}/feature_templates_config.txt"
+      when: feature_templates_show is defined
+
+    - name: Save policy definitions output to file
+      copy:
+        content: |
+          Cisco SD-WAN Policy Definitions Configuration Details
+          ====================================================
+          Execution Time: {{ ansible_date_time.iso8601 }}
+          vManage Host: {{ vmanage_host }}
+          
+          {{ policy_definitions_show.stdout }}
+          {{ policy_definitions_show.stderr }}
+        dest: "{{ show_config_dir }}/policy_definitions_config.txt"
+      when: policy_definitions_show is defined
+
+    - name: Save policy lists output to file
+      copy:
+        content: |
+          Cisco SD-WAN Policy Lists Configuration Details
+          ==============================================
+          Execution Time: {{ ansible_date_time.iso8601 }}
+          vManage Host: {{ vmanage_host }}
+          
+          {{ policy_lists_show.stdout }}
+          {{ policy_lists_show.stderr }}
+        dest: "{{ show_config_dir }}/policy_lists_config.txt"
+      when: policy_lists_show is defined
+
+    - name: Save configuration groups output to file
+      copy:
+        content: |
+          Cisco SD-WAN Configuration Groups Details
+          ========================================
+          Execution Time: {{ ansible_date_time.iso8601 }}
+          vManage Host: {{ vmanage_host }}
+          
+          {{ config_groups_show.stdout }}
+          {{ config_groups_show.stderr }}
+        dest: "{{ show_config_dir }}/config_groups_config.txt"
+      when: config_groups_show is defined
+
+    - name: Check generated files
+      find:
+        paths: "{{ show_config_dir }}"
+        file_type: file
+      register: generated_files
+
+    - name: Display execution results
+      debug:
+        msg: |
+          =====================================
+          SD-WAN SHOW CONFIGURATION COMPLETED
+          =====================================
+          Output Directory: {{ show_config_dir }}
+          Files Generated: {{ generated_files.files | length }}
+          
+          Configuration Items Processed:
+          - Device Templates: {{ 'SUCCESS' if device_templates_show.rc == 0 else 'FAILED' }}
+          - Feature Templates: {{ 'SUCCESS' if feature_templates_show.rc == 0 else 'FAILED' }}
+          - Policy Definitions: {{ 'SUCCESS' if policy_definitions_show.rc == 0 else 'FAILED' }}
+          - Policy Lists: {{ 'SUCCESS' if policy_lists_show.rc == 0 else 'FAILED' }}
+          - Configuration Groups: {{ 'SUCCESS' if config_groups_show.rc == 0 else 'FAILED' }}
