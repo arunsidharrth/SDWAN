@@ -1,255 +1,184 @@
 ---
 - name: SD-WAN Health Checks
   hosts: localhost
-  gather_facts: true
   connection: local
-  
+  gather_facts: yes
   vars:
-    # Use environment variables for credentials
-    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
-    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
-    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
-    vmanage_port: "443"
-    
-    # Output directory
-    generated_dir: "{{ playbook_dir }}/../generated"
-    
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('sandbox-sdwan-2.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('devnetuser') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('RG!_Yw919_83') }}"
+    vmanage_port: "{{ lookup('env', 'VMANAGE_PORT') | default('8443') }}"
+    output_dir: "/tmp/sdwan_health_check"
+    timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+  
   tasks:
-    - name: Validate environment variables are set
-      fail:
-        msg: "Required environment variable {{ item }} is not set"
-      when: vars[item] == ""
-      loop:
-        - vmanage_host
-        - vmanage_username
-        - vmanage_password
-        - vmanage_port
+    - name: Display environment check
+      debug:
+        msg: 
+          - "vManage Host: {{ vmanage_host }}"
+          - "vManage Username: {{ vmanage_username }}"
+          - "vManage Port: {{ vmanage_port }}"
+          - "Output Directory: {{ output_dir }}"
 
     - name: Create generated directory
       file:
-        path: "{{ generated_dir }}"
+        path: "{{ output_dir }}"
         state: directory
         mode: '0755'
+      become: false
+      ignore_errors: yes
 
-    - name: Test vManage API connectivity
+    - name: Check vManage connectivity
       uri:
-        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/client/server"
         method: GET
-        user: "{{ vmanage_username }}"
-        password: "{{ vmanage_password }}"
-        force_basic_auth: yes
-        validate_certs: false
-        timeout: 60
-        headers:
-          Content-Type: "application/json"
-      register: connectivity_test
-      ignore_errors: true
+        validate_certs: no
+        timeout: 10
+      register: connectivity_check
+      ignore_errors: yes
 
-    - name: Get system status
+    - name: Display connectivity results
+      debug:
+        msg:
+          - "Connectivity Status: {{ 'SUCCESS' if connectivity_check.status == 200 else 'FAILED' }}"
+          - "Response Code: {{ connectivity_check.status | default('N/A') }}"
+          - "Error: {{ connectivity_check.msg | default('None') }}"
+
+    - name: Authenticate to vManage
       uri:
-        url: "https://{{ vmanage_host }}/dataservice/system/status"
-        method: GET
-        user: "{{ vmanage_username }}"
-        password: "{{ vmanage_password }}"
-        force_basic_auth: yes
-        validate_certs: false
-        timeout: 30
-        headers:
-          Content-Type: "application/json"
-      register: system_status
-      ignore_errors: true
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/j_security_check"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          j_username: "{{ vmanage_username }}"
+          j_password: "{{ vmanage_password }}"
+        validate_certs: no
+        status_code: [200, 302]
+      register: auth_response
+      when: connectivity_check.status == 200
+      ignore_errors: yes
 
-    - name: Get device list
+    - name: Get session token
       uri:
-        url: "https://{{ vmanage_host }}/dataservice/device"
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/client/token"
         method: GET
-        user: "{{ vmanage_username }}"
-        password: "{{ vmanage_password }}"
-        force_basic_auth: yes
-        validate_certs: false
-        timeout: 60
+        validate_certs: no
         headers:
-          Content-Type: "application/json"
-      register: device_list
-      ignore_errors: true
+          Cookie: "{{ auth_response.set_cookie | default('') }}"
+      register: token_response
+      when: auth_response is defined and auth_response.status in [200, 302]
+      ignore_errors: yes
 
-    - name: Get control connections
+    - name: Get device status
       uri:
-        url: "https://{{ vmanage_host }}/dataservice/device/control/connections"
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device"
         method: GET
-        user: "{{ vmanage_username }}"
-        password: "{{ vmanage_password }}"
-        force_basic_auth: yes
-        validate_certs: false
-        timeout: 60
+        validate_certs: no
         headers:
-          Content-Type: "application/json"
-      register: control_connections
-      ignore_errors: true
+          Cookie: "{{ auth_response.set_cookie | default('') }}"
+          X-XSRF-TOKEN: "{{ token_response.content | default('') }}"
+      register: device_status
+      when: token_response is defined and token_response.status == 200
+      ignore_errors: yes
 
-    - name: Get BFD sessions
+    - name: Get alarms
       uri:
-        url: "https://{{ vmanage_host }}/dataservice/device/bfd/sessions"
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/alarms"
         method: GET
-        user: "{{ vmanage_username }}"
-        password: "{{ vmanage_password }}"
-        force_basic_auth: yes
-        validate_certs: false
-        timeout: 60
+        validate_certs: no
         headers:
-          Content-Type: "application/json"
-      register: bfd_sessions
-      ignore_errors: true
+          Cookie: "{{ auth_response.set_cookie | default('') }}"
+          X-XSRF-TOKEN: "{{ token_response.content | default('') }}"
+      register: alarms_data
+      when: token_response is defined and token_response.status == 200
+      ignore_errors: yes
 
-    - name: Get OMP peers
-      uri:
-        url: "https://{{ vmanage_host }}/dataservice/device/omp/peers"
-        method: GET
-        user: "{{ vmanage_username }}"
-        password: "{{ vmanage_password }}"
-        force_basic_auth: yes
-        validate_certs: false
-        timeout: 60
-        headers:
-          Content-Type: "application/json"
-      register: omp_peers
-      ignore_errors: true
-
-    - name: Get current alarms
-      uri:
-        url: "https://{{ vmanage_host }}/dataservice/alarms"
-        method: GET
-        user: "{{ vmanage_username }}"
-        password: "{{ vmanage_password }}"
-        force_basic_auth: yes
-        validate_certs: false
-        timeout: 30
-        headers:
-          Content-Type: "application/json"
-      register: current_alarms
-      ignore_errors: true
-
-    - name: Get certificate status
-      uri:
-        url: "https://{{ vmanage_host }}/dataservice/certificate/stats"
-        method: GET
-        user: "{{ vmanage_username }}"
-        password: "{{ vmanage_password }}"
-        force_basic_auth: yes
-        validate_certs: false
-        timeout: 30
-        headers:
-          Content-Type: "application/json"
-      register: cert_status
-      ignore_errors: true
-
-    - name: Get cluster status
-      uri:
-        url: "https://{{ vmanage_host }}/dataservice/clusterManagement/health/status"
-        method: GET
-        user: "{{ vmanage_username }}"
-        password: "{{ vmanage_password }}"
-        force_basic_auth: yes
-        validate_certs: false
-        timeout: 30
-        headers:
-          Content-Type: "application/json"
-      register: cluster_status
-      ignore_errors: true
-
-    - name: Calculate health check statistics
-      set_fact:
-        health_stats:
-          connectivity_status: "{{ 'PASS' if connectivity_test.status == 200 else 'FAIL' }}"
-          system_status: "{{ 'PASS' if system_status.status == 200 else 'FAIL' }}"
-          total_devices: "{{ device_list.json.data | length if device_list.status == 200 else 0 }}"
-          online_devices: "{{ device_list.json.data | selectattr('reachability', 'equalto', 'reachable') | list | length if device_list.status == 200 else 0 }}"
-          control_connections_count: "{{ control_connections.json.data | length if control_connections.status == 200 else 0 }}"
-          bfd_sessions_count: "{{ bfd_sessions.json.data | length if bfd_sessions.status == 200 else 0 }}"
-          omp_peers_count: "{{ omp_peers.json.data | length if omp_peers.status == 200 else 0 }}"
-          active_alarms: "{{ current_alarms.json.data | length if current_alarms.status == 200 else 0 }}"
-          cert_status: "{{ 'PASS' if cert_status.status == 200 else 'FAIL' }}"
-          cluster_status: "{{ 'PASS' if cluster_status.status == 200 else 'FAIL' }}"
-
-    - name: Save connectivity test results
-      copy:
-        content: "{{ connectivity_test | to_nice_json }}"
-        dest: "{{ generated_dir }}/connectivity_test.json"
-      when: connectivity_test is defined
-
-    - name: Save system status
-      copy:
-        content: "{{ system_status | to_nice_json }}"
-        dest: "{{ generated_dir }}/system_status.json"
-      when: system_status is defined
-
-    - name: Save device list
-      copy:
-        content: "{{ device_list | to_nice_json }}"
-        dest: "{{ generated_dir }}/device_list.json"
-      when: device_list is defined
-
-    - name: Save control connections
-      copy:
-        content: "{{ control_connections | to_nice_json }}"
-        dest: "{{ generated_dir }}/control_connections.json"
-      when: control_connections is defined
-
-    - name: Save BFD sessions
-      copy:
-        content: "{{ bfd_sessions | to_nice_json }}"
-        dest: "{{ generated_dir }}/bfd_sessions.json"
-      when: bfd_sessions is defined
-
-    - name: Save OMP peers
-      copy:
-        content: "{{ omp_peers | to_nice_json }}"
-        dest: "{{ generated_dir }}/omp_peers.json"
-      when: omp_peers is defined
-
-    - name: Save current alarms
-      copy:
-        content: "{{ current_alarms | to_nice_json }}"
-        dest: "{{ generated_dir }}/current_alarms.json"
-      when: current_alarms is defined
-
-    - name: Save certificate status
-      copy:
-        content: "{{ cert_status | to_nice_json }}"
-        dest: "{{ generated_dir }}/certificate_status.json"
-      when: cert_status is defined
-
-    - name: Save cluster status
-      copy:
-        content: "{{ cluster_status | to_nice_json }}"
-        dest: "{{ generated_dir }}/cluster_status.json"
-      when: cluster_status is defined
-
-    - name: Save health check summary
+    - name: Create health summary report
       copy:
         content: |
-          SD-WAN Health Check Results
-          ==========================
-          Date: {{ ansible_date_time.iso8601 }}
-          vManage: {{ vmanage_host }}
-          vManage Version: 20.15
+          SD-WAN Health Check Summary
+          ===========================
+          Timestamp: {{ ansible_date_time.iso8601 }}
+          vManage Host: {{ vmanage_host }}:{{ vmanage_port }}
           
-          Health Check Status:
-          - API Connectivity: {{ health_stats.connectivity_status }}
-          - System Status: {{ health_stats.system_status }}
-          - Certificate Status: {{ health_stats.cert_status }}
-          - Cluster Status: {{ health_stats.cluster_status }}
+          CONNECTIVITY TEST:
+          {% if connectivity_check.status == 200 %}
+          Status: SUCCESS ✓
+          Response Code: {{ connectivity_check.status }}
+          {% else %}
+          Status: FAILED ✗
+          Error: {{ connectivity_check.msg | default('Connection timeout or refused') }}
+          {% endif %}
           
-          Device Summary:
-          - Total Devices: {{ health_stats.total_devices }}
-          - Online Devices: {{ health_stats.online_devices }}
-          - Offline Devices: {{ health_stats.total_devices | int - health_stats.online_devices | int }}
+          AUTHENTICATION TEST:
+          {% if auth_response is defined and auth_response.status in [200, 302] %}
+          Status: SUCCESS ✓
+          {% elif auth_response is defined %}
+          Status: FAILED ✗
+          Error: HTTP {{ auth_response.status }}
+          {% else %}
+          Status: SKIPPED (Connectivity failed)
+          {% endif %}
           
-          Network Status:
-          - Control Connections: {{ health_stats.control_connections_count }}
-          - BFD Sessions: {{ health_stats.bfd_sessions_count }}
-          - OMP Peers: {{ health_stats.omp_peers_count }}
-          - Active Alarms: {{ health_stats.active_alarms }}
+          TOKEN RETRIEVAL:
+          {% if token_response is defined and token_response.status == 200 %}
+          Status: SUCCESS ✓
+          {% elif token_response is defined %}
+          Status: FAILED ✗
+          Error: HTTP {{ token_response.status }}
+          {% else %}
+          Status: SKIPPED (Authentication failed)
+          {% endif %}
           
-          Overall Health: {{ 'HEALTHY' if health_stats.connectivity_status == 'PASS' and health_stats.system_status == 'PASS' and health_stats.online_devices | int > 0 else 'ISSUES DETECTED' }}
-        dest: "{{ generated_dir }}/health_check_summary.txt"
+          DEVICE STATUS:
+          {% if device_status is defined and device_status.status == 200 %}
+          Status: SUCCESS ✓
+          Device Count: {{ device_status.json.data | length | default('N/A') }}
+          {% elif device_status is defined %}
+          Status: FAILED ✗
+          Error: HTTP {{ device_status.status }}
+          {% else %}
+          Status: SKIPPED (Token retrieval failed)
+          {% endif %}
+          
+          ALARMS CHECK:
+          {% if alarms_data is defined and alarms_data.status == 200 %}
+          Status: SUCCESS ✓
+          Active Alarms: {{ alarms_data.json.data | length | default('N/A') }}
+          {% elif alarms_data is defined %}
+          Status: FAILED ✗
+          Error: HTTP {{ alarms_data.status }}
+          {% else %}
+          Status: SKIPPED (Token retrieval failed)
+          {% endif %}
+          
+          OVERALL HEALTH:
+          {% if connectivity_check.status == 200 and auth_response is defined and auth_response.status in [200, 302] and token_response is defined and token_response.status == 200 %}
+          Status: HEALTHY ✓
+          {% else %}
+          Status: ISSUES DETECTED ✗
+          {% endif %}
+        dest: "{{ output_dir }}/health_check_summary_{{ timestamp }}.txt"
+        mode: '0644'
+      ignore_errors: yes
+
+    - name: Display final summary
+      debug:
+        msg:
+          - "=== SD-WAN Health Check Complete ==="
+          - "Connectivity: {{ 'SUCCESS' if connectivity_check.status == 200 else 'FAILED' }}"
+          - "Authentication: {{ 'SUCCESS' if auth_response is defined and auth_response.status in [200, 302] else 'FAILED' }}"
+          - "API Access: {{ 'SUCCESS' if token_response is defined and token_response.status == 200 else 'FAILED' }}"
+          - "Report saved to: {{ output_dir }}/health_check_summary_{{ timestamp }}.txt"
+
+    - name: Show generated files
+      find:
+        paths: "{{ output_dir }}"
+        patterns: "health_check_summary_*.txt"
+      register: generated_files
+
+    - name: List generated reports
+      debug:
+        msg: "Generated report: {{ item.path }}"
+      loop: "{{ generated_files.files }}"
+      when: generated_files.files is defined
