@@ -1,1 +1,161 @@
+---
+- name: Get SD-WAN Device Details
+  hosts: localhost
+  gather_facts: true
+  connection: local
+  
+  vars:
+    # Use environment variables for credentials
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    
+    # Directory structure
+    generated_dir: "{{ playbook_dir }}/../generated"
+    
+    # Device UUID to query (can be set via extra vars)
+    device_uuid: "{{ device_id | default('') }}"
 
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+
+    - name: Create generated directory
+      file:
+        path: "{{ generated_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Get authentication token
+      uri:
+        url: "https://{{ vmanage_host }}/j_security_check"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          j_username: "{{ vmanage_username }}"
+          j_password: "{{ vmanage_password }}"
+        validate_certs: false
+        timeout: 60
+        status_code: [200, 302]
+        return_content: yes
+        follow_redirects: no
+      register: auth_response
+
+    - name: Get session token
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/client/token"
+        method: GET
+        validate_certs: false
+        timeout: 60
+        return_content: yes
+        headers:
+          Cookie: "{{ auth_response.set_cookie | default(auth_response.cookies_string) }}"
+      register: token_response
+
+    - name: Get list of all devices if no specific device UUID provided
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device"
+        method: GET
+        validate_certs: false
+        timeout: 60
+        return_content: yes
+        headers:
+          Cookie: "{{ auth_response.set_cookie | default(auth_response.cookies_string) }}"
+          X-XSRF-TOKEN: "{{ token_response.content }}"
+      register: all_devices_response
+      when: device_uuid == ""
+
+    - name: Save all devices list to file
+      copy:
+        content: "{{ all_devices_response.json | to_nice_json }}"
+        dest: "{{ generated_dir }}/all_devices.json"
+      when: device_uuid == "" and all_devices_response is defined and all_devices_response.json is defined
+
+    - name: Display available devices for selection
+      debug:
+        msg: |
+          Available devices:
+          {% for device in all_devices_response.json.data %}
+          - Device ID: {{ device['system-ip'] }}
+          - Hostname: {{ device['host-name'] }}
+          - Device Type: {{ device['device-type'] }}
+          - UUID: {{ device['uuid'] }}
+          {% endfor %}
+      when: device_uuid == "" and all_devices_response is defined
+
+    - name: Get specific device details
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/details?deviceId={{ device_uuid }}"
+        method: GET
+        validate_certs: false
+        timeout: 60
+        headers:
+          Cookie: "{{ auth_response.cookies_string }}"
+          X-XSRF-TOKEN: "{{ token_response.json.token }}"
+      register: device_details_response
+      when: device_uuid != ""
+
+    - name: Save specific device details to file
+      copy:
+        content: "{{ device_details_response.json | to_nice_json }}"
+        dest: "{{ generated_dir }}/device_details_{{ device_uuid }}.json"
+      when: device_uuid != "" and device_details_response is defined
+
+    - name: Get device system status
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/system/status?deviceId={{ device_uuid }}"
+        method: GET
+        validate_certs: false
+        timeout: 60
+        headers:
+          Cookie: "{{ auth_response.cookies_string }}"
+          X-XSRF-TOKEN: "{{ token_response.json.token }}"
+      register: device_status_response
+      when: device_uuid != ""
+      ignore_errors: true
+
+    - name: Save device system status to file
+      copy:
+        content: "{{ device_status_response.json | to_nice_json }}"
+        dest: "{{ generated_dir }}/device_status_{{ device_uuid }}.json"
+      when: device_uuid != "" and device_status_response is defined and device_status_response.json is defined
+
+    - name: Get device hardware info
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/hardware/status?deviceId={{ device_uuid }}"
+        method: GET
+        validate_certs: false
+        timeout: 60
+        headers:
+          Cookie: "{{ auth_response.cookies_string }}"
+          X-XSRF-TOKEN: "{{ token_response.json.token }}"
+      register: device_hardware_response
+      when: device_uuid != ""
+      ignore_errors: true
+
+    - name: Save device hardware info to file
+      copy:
+        content: "{{ device_hardware_response.json | to_nice_json }}"
+        dest: "{{ generated_dir }}/device_hardware_{{ device_uuid }}.json"
+      when: device_uuid != "" and device_hardware_response is defined and device_hardware_response.json is defined
+
+    - name: Display completion message
+      debug:
+        msg: |
+          Device details retrieval completed successfully.
+          Results saved to: {{ generated_dir }}
+          {% if device_uuid == "" %}
+          All devices list saved to: all_devices.json
+          {% else %}
+          Device-specific files saved:
+          - device_details_{{ device_uuid }}.json
+          - device_status_{{ device_uuid }}.json (if available)
+          - device_hardware_{{ device_uuid }}.json (if available)
+          {% endif %}
