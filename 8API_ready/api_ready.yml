@@ -1,1 +1,183 @@
-
+---
+- name: SD-WAN API Readiness Check
+  hosts: localhost
+  gather_facts: true
+  connection: local
+  
+  vars:
+    # Use environment variables for credentials
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    
+    # Output directory
+    generated_dir: "{{ playbook_dir }}/../generated"
+    
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+        - vmanage_port
+    
+    - name: Create generated directory
+      file:
+        path: "{{ generated_dir }}"
+        state: directory
+        mode: '0755'
+    
+    - name: Check vManage API server status
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/server/status"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 30
+        headers:
+          Content-Type: "application/json"
+      register: server_status
+      ignore_errors: true
+    
+    - name: Check vManage system readiness
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 30
+        headers:
+          Content-Type: "application/json"
+      register: system_ready
+      ignore_errors: true
+    
+    - name: Check vManage device dashboard status
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/dashboard/status"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 30
+        headers:
+          Content-Type: "application/json"
+      register: dashboard_status
+      ignore_errors: true
+    
+    - name: Check vManage alarms endpoint
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/alarms"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 30
+        headers:
+          Content-Type: "application/json"
+      register: alarms_check
+      ignore_errors: true
+    
+    - name: Check vManage template endpoint
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/feature"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 30
+        headers:
+          Content-Type: "application/json"
+      register: template_check
+      ignore_errors: true
+    
+    - name: Check vManage policy endpoint
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/list"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 30
+        headers:
+          Content-Type: "application/json"
+      register: policy_check
+      ignore_errors: true
+    
+    - name: Check vManage version endpoint
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/vedges"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 30
+        headers:
+          Content-Type: "application/json"
+      register: vedges_check
+      ignore_errors: true
+    
+    - name: Compile API readiness results
+      set_fact:
+        api_results:
+          server_status: "{{ 'Ready' if server_status.status == 200 else 'Not Ready' }}"
+          server_code: "{{ server_status.status | default('N/A') }}"
+          system_ready: "{{ 'Ready' if system_ready.status == 200 else 'Not Ready' }}"
+          system_code: "{{ system_ready.status | default('N/A') }}"
+          dashboard_status: "{{ 'Ready' if dashboard_status.status == 200 else 'Not Ready' }}"
+          dashboard_code: "{{ dashboard_status.status | default('N/A') }}"
+          alarms_endpoint: "{{ 'Ready' if alarms_check.status == 200 else 'Not Ready' }}"
+          alarms_code: "{{ alarms_check.status | default('N/A') }}"
+          template_endpoint: "{{ 'Ready' if template_check.status == 200 else 'Not Ready' }}"
+          template_code: "{{ template_check.status | default('N/A') }}"
+          policy_endpoint: "{{ 'Ready' if policy_check.status == 200 else 'Not Ready' }}"
+          policy_code: "{{ policy_check.status | default('N/A') }}"
+          vedges_endpoint: "{{ 'Ready' if vedges_check.status == 200 else 'Not Ready' }}"
+          vedges_code: "{{ vedges_check.status | default('N/A') }}"
+          overall_status: "{{ 'API Ready' if (server_status.status == 200 and system_ready.status == 200) else 'API Not Ready' }}"
+    
+    - name: Save API readiness results to file
+      copy:
+        content: |
+          vManage API Readiness Check Results
+          ====================================
+          Host: {{ vmanage_host }}
+          Date: {{ ansible_date_time.date }}
+          Time: {{ ansible_date_time.time }}
+          
+          Endpoint Status:
+          ----------------
+          Server Status: {{ api_results.server_status }} (HTTP {{ api_results.server_code }})
+          System Ready: {{ api_results.system_ready }} (HTTP {{ api_results.system_code }})
+          Dashboard: {{ api_results.dashboard_status }} (HTTP {{ api_results.dashboard_code }})
+          Alarms: {{ api_results.alarms_endpoint }} (HTTP {{ api_results.alarms_code }})
+          Templates: {{ api_results.template_endpoint }} (HTTP {{ api_results.template_code }})
+          Policies: {{ api_results.policy_endpoint }} (HTTP {{ api_results.policy_code }})
+          vEdges: {{ api_results.vedges_endpoint }} (HTTP {{ api_results.vedges_code }})
+          
+          Overall Status: {{ api_results.overall_status }}
+        dest: "{{ generated_dir }}/api_readiness_check.txt"
+    
+    - name: Save API results as JSON
+      copy:
+        content: "{{ api_results | to_nice_json }}"
+        dest: "{{ generated_dir }}/api_readiness_results.json"
+    
+    - name: Display API readiness status
+      debug:
+        msg: |
+          API Readiness Check Complete
+          Overall Status: {{ api_results.overall_status }}
+          Results saved to: {{ generated_dir }}/
