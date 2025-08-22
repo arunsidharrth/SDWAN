@@ -1,1 +1,158 @@
-
+---
+- name: List All SD-WAN Devices
+  hosts: localhost
+  gather_facts: true
+  connection: local
+  
+  vars:
+    # Use environment variables for credentials
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    
+    # Output directory
+    generated_dir: "{{ playbook_dir }}/../generated"
+    
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+        
+    - name: Create generated directory
+      file:
+        path: "{{ generated_dir }}"
+        state: directory
+        mode: '0755'
+        
+    - name: Authenticate to vManage
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/j_security_check"
+        method: POST
+        body: "j_username={{ vmanage_username }}&j_password={{ vmanage_password }}"
+        body_format: form-urlencoded
+        validate_certs: false
+        status_code: 200
+        headers:
+          Content-Type: "application/x-www-form-urlencoded"
+      register: login_response
+      
+    - name: Get session token
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/client/token"
+        method: GET
+        validate_certs: false
+        headers:
+          Cookie: "{{ login_response.set_cookie }}"
+      register: token_response
+      
+    - name: Debug token response
+      debug:
+        msg: "Token response: {{ token_response }}"
+      when: token_response is defined
+      
+    - name: Extract token value
+      set_fact:
+        xsrf_token: "{{ token_response.content | default(token_response.body) | default('') }}"
+      
+    - name: Get all devices from vManage
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device"
+        method: GET
+        validate_certs: false
+        headers:
+          Cookie: "{{ login_response.set_cookie }}"
+          X-XSRF-TOKEN: "{{ xsrf_token }}"
+          Content-Type: "application/json"
+        timeout: 60
+      register: devices_response
+      
+    - name: Parse device information
+      set_fact:
+        device_list: "{{ devices_response.json.data | default([]) }}"
+        
+    - name: Extract key device information
+      set_fact:
+        simplified_devices: |
+          {% set devices = [] %}
+          {% for device in device_list %}
+          {% set _ = devices.append({
+            'hostname': device.host_name | default('N/A'),
+            'system_ip': device.system_ip | default('N/A'),
+            'device_id': device.uuid | default('N/A'),
+            'site_id': device.site_id | default('N/A'),
+            'device_model': device.device_model | default('N/A'),
+            'device_type': device.device_type | default('N/A'),
+            'reachability': device.reachability | default('N/A'),
+            'status': device.status | default('N/A'),
+            'version': device.version | default('N/A'),
+            'certificate_validity': device.certificate_validity | default('N/A'),
+            'uptime': device.uptime | default('N/A'),
+            'control_connections': device.control_connections | default('N/A'),
+            'bfd_sessions_up': device.bfdSessionsUp | default('N/A'),
+            'bfd_sessions_down': device.bfdSessionsDown | default('N/A')
+          }) %}
+          {% endfor %}
+          {{ devices }}
+          
+    - name: Save complete device data as JSON
+      copy:
+        content: "{{ device_list | to_nice_json }}"
+        dest: "{{ generated_dir }}/all_devices_complete.json"
+        
+    - name: Save simplified device list as JSON
+      copy:
+        content: "{{ simplified_devices | to_nice_json }}"
+        dest: "{{ generated_dir }}/all_devices_simplified.json"
+        
+    - name: Create CSV report of devices
+      copy:
+        content: |
+          Hostname,System IP,Device ID,Site ID,Model,Type,Reachability,Status,Version,Certificate Validity,Uptime,Control Connections,BFD Sessions Up,BFD Sessions Down
+          {% for device in simplified_devices %}
+          {{ device.hostname }},{{ device.system_ip }},{{ device.device_id }},{{ device.site_id }},{{ device.device_model }},{{ device.device_type }},{{ device.reachability }},{{ device.status }},{{ device.version }},{{ device.certificate_validity }},{{ device.uptime }},{{ device.control_connections }},{{ device.bfd_sessions_up }},{{ device.bfd_sessions_down }}
+          {% endfor %}
+        dest: "{{ generated_dir }}/all_devices.csv"
+        
+    - name: Display device count
+      debug:
+        msg: "Total devices found: {{ device_list | length }}"
+        
+    - name: Display device summary by type
+      debug:
+        msg: |
+          Device Summary by Type:
+          {% set type_groups = {} %}
+          {% for device in device_list %}
+          {% set dtype = device.get('device_type', 'Unknown') %}
+          {% if dtype in type_groups %}
+          {% set _ = type_groups.update({dtype: type_groups[dtype] + 1}) %}
+          {% else %}
+          {% set _ = type_groups.update({dtype: 1}) %}
+          {% endif %}
+          {% endfor %}
+          {% for type, count in type_groups.items() %}
+          - {{ type }}: {{ count }} devices
+          {% endfor %}
+          
+    - name: Display device summary by reachability
+      debug:
+        msg: |
+          Device Summary by Reachability:
+          {% set reach_groups = {} %}
+          {% for device in device_list %}
+          {% set reach = device.get('reachability', 'Unknown') %}
+          {% if reach in reach_groups %}
+          {% set _ = reach_groups.update({reach: reach_groups[reach] + 1}) %}
+          {% else %}
+          {% set _ = reach_groups.update({reach: 1}) %}
+          {% endif %}
+          {% endfor %}
+          {% for status, count in reach_groups.items() %}
+          - {{ status }}: {{ count }} devices
+          {% endfor %}
