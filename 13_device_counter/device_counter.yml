@@ -1,1 +1,128 @@
-
+---
+- name: Cisco SD-WAN Get Device Counters - Use Case 13
+  hosts: localhost
+  gather_facts: true
+  connection: local
+  
+  vars:
+    # Use environment variables for credentials
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    
+    # Output directory
+    generated_dir: "{{ playbook_dir }}/../generated"
+  
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+        - vmanage_port
+    
+    - name: Create generated directory
+      file:
+        path: "{{ generated_dir }}"
+        state: directory
+        mode: '0755'
+    
+    - name: Test vManage connectivity
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: connectivity_test
+      ignore_errors: true
+    
+    - name: Fail if connectivity test failed
+      fail:
+        msg: "Cannot connect to vManage at {{ vmanage_host }}"
+      when: connectivity_test.status != 200
+    
+    - name: Get all devices list
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: devices_response
+    
+    - name: Get device counters for each device
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/counters?deviceId={{ item.deviceId }}"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: device_counters
+      loop: "{{ devices_response.json.data }}"
+      when: devices_response.json.data is defined
+      ignore_errors: true
+    
+    - name: Save device counters to JSON file
+      copy:
+        content: |
+          {
+            "collection_info": {
+              "vmanage_host": "{{ vmanage_host }}",
+              "collection_date": "{{ ansible_date_time.iso8601 }}",
+              "total_devices": {{ devices_response.json.data | length if devices_response.json.data is defined else 0 }},
+              "successful_queries": {{ device_counters.results | selectattr('status', 'equalto', 200) | list | length if device_counters.results is defined else 0 }}
+            },
+            "device_counters": [
+          {% for result in device_counters.results %}
+          {% if result.status == 200 %}
+              {
+                "device_id": "{{ result.item.deviceId }}",
+                "system_ip": "{{ result.item['system-ip'] | default('N/A') }}",
+                "hostname": "{{ result.item['host-name'] | default('N/A') }}",
+                "device_type": "{{ result.item['device-type'] | default('N/A') }}",
+                "site_id": "{{ result.item['site-id'] | default('N/A') }}",
+                "counters": {{ result.json | to_nice_json }}
+              }{% if not loop.last %},{% endif %}
+          {% endif %}
+          {% endfor %}
+            ]
+          }
+        dest: "{{ generated_dir }}/device_counters.json"
+      when: device_counters.results is defined
+    
+    - name: Save device list to JSON file
+      copy:
+        content: "{{ devices_response.json | to_nice_json }}"
+        dest: "{{ generated_dir }}/devices_list.json"
+      when: devices_response.json is defined
+    
+    - name: Create device counters summary CSV
+      copy:
+        content: |
+          Device_ID,System_IP,Hostname,Device_Type,Site_ID,Reachability,Status,Counter_Status
+          {% for result in device_counters.results %}
+          {% if result.status == 200 %}
+          {{ result.item.deviceId }},{{ result.item['system-ip'] | default('N/A') }},{{ result.item['host-name'] | default('N/A') }},{{ result.item['device-type'] | default('N/A') }},{{ result.item['site-id'] | default('N/A') }},{{ result.item.reachability | default('N/A') }},Success,{{ result.json | length }} records
+          {% else %}
+          {{ result.item.deviceId }},{{ result.item['system-ip'] | default('N/A') }},{{ result.item['host-name'] | default('N/A') }},{{ result.item['device-type'] | default('N/A') }},{{ result.item['site-id'] | default('N/A') }},{{ result.item.reachability | default('N/A') }},Failed,Error {{ result.status | default('Unknown') }}
+          {% endif %}
+          {% endfor %}
+        dest: "{{ generated_dir }}/device_counters_summary.csv"
+      when: device_counters.results is defined
