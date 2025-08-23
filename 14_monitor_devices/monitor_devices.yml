@@ -1,1 +1,212 @@
+---
+- name: Cisco SD-WAN Device Monitoring
+  hosts: localhost
+  gather_facts: true
+  connection: local
+  vars:
+    # Use environment variables for credentials
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    
+    # Output directory
+    generated_dir: "{{ playbook_dir }}/../generated"
 
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+        - vmanage_port
+
+    - name: Create generated directory
+      file:
+        path: "{{ generated_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Test vManage connectivity
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: connectivity_test
+      ignore_errors: true
+
+    - name: Fail if connectivity test failed
+      fail:
+        msg: "Cannot connect to vManage at {{ vmanage_host }}"
+      when: connectivity_test.status != 200
+
+    - name: Get all devices inventory
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: devices_inventory
+
+    - name: Get device status for all devices
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/monitor"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: device_status
+
+    - name: Get device counters
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/counters"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: device_counters
+      ignore_errors: true
+
+    - name: Get control connections status
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/control/connections"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: control_connections
+      ignore_errors: true
+
+    - name: Get BFD sessions
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/bfd/sessions"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: bfd_sessions
+      ignore_errors: true
+
+    - name: Get OMP peers
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/omp/peers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: omp_peers
+      ignore_errors: true
+
+    - name: Get system information
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/system/info"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: system_info
+      ignore_errors: true
+
+    - name: Save devices inventory
+      copy:
+        content: "{{ devices_inventory.json | to_nice_json }}"
+        dest: "{{ generated_dir }}/devices_inventory.json"
+      when: devices_inventory.json is defined
+
+    - name: Save device monitoring status
+      copy:
+        content: "{{ device_status.json | to_nice_json }}"
+        dest: "{{ generated_dir }}/device_status.json"
+      when: device_status.json is defined
+
+    - name: Save device counters
+      copy:
+        content: "{{ device_counters.json | to_nice_json }}"
+        dest: "{{ generated_dir }}/device_counters.json"
+      when: device_counters.json is defined
+
+    - name: Save control connections
+      copy:
+        content: "{{ control_connections.json | to_nice_json }}"
+        dest: "{{ generated_dir }}/control_connections.json"
+      when: control_connections.json is defined
+
+    - name: Save BFD sessions
+      copy:
+        content: "{{ bfd_sessions.json | to_nice_json }}"
+        dest: "{{ generated_dir }}/bfd_sessions.json"
+      when: bfd_sessions.json is defined
+
+    - name: Save OMP peers
+      copy:
+        content: "{{ omp_peers.json | to_nice_json }}"
+        dest: "{{ generated_dir }}/omp_peers.json"
+      when: omp_peers.json is defined
+
+    - name: Save system information
+      copy:
+        content: "{{ system_info.json | to_nice_json }}"
+        dest: "{{ generated_dir }}/system_info.json"
+      when: system_info.json is defined
+
+    - name: Create monitoring summary
+      copy:
+        content: |
+          Cisco SD-WAN Device Monitoring Results
+          =====================================
+          
+          Monitoring Date: {{ ansible_date_time.iso8601 }}
+          vManage Host: {{ vmanage_host }}
+          Username: {{ vmanage_username }}
+          
+          Files Generated:
+          - devices_inventory.json: Complete device inventory
+          - device_status.json: Device operational status
+          - device_counters.json: Device statistics counters
+          - control_connections.json: Control plane connections
+          - bfd_sessions.json: BFD session information
+          - omp_peers.json: OMP peer relationships
+          - system_info.json: System information for all devices
+          
+          Total Devices Monitored: {{ devices_inventory.json.data | length if devices_inventory.json.data is defined else 0 }}
+          
+          Monitoring Status: COMPLETED
+        dest: "{{ generated_dir }}/monitoring_summary.txt"
