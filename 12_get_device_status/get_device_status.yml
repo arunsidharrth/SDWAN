@@ -1,1 +1,153 @@
+---
+- name: Get SD-WAN Device Status - Check Device Operational Status
+  hosts: localhost
+  gather_facts: true
+  connection: local
+  
+  vars:
+    # Use environment variables for credentials
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    
+    # Directory structure
+    generated_dir: "{{ playbook_dir }}/../generated"
+    
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+        - vmanage_port
 
+    - name: Display connection information (without password)
+      debug:
+        msg: |
+          Connection Details:
+          Host: {{ vmanage_host }}
+          Username: {{ vmanage_username }}
+          Port: {{ vmanage_port }}
+          Password: [PROTECTED]
+          Generated Directory: {{ generated_dir }}
+
+    - name: Create generated directory
+      file:
+        path: "{{ generated_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Test vManage connectivity
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: connectivity_test
+      ignore_errors: true
+
+    - name: Fail if connectivity test failed
+      fail:
+        msg: "Cannot connect to vManage at {{ vmanage_host }}"
+      when: connectivity_test.status != 200
+
+    - name: Get all device status information
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: device_status_response
+
+    - name: Get device control connections status
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/control/connections"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: control_status_response
+      ignore_errors: true
+
+    - name: Get device monitor status
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/monitor"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: monitor_status_response
+      ignore_errors: true
+
+    - name: Save device status to JSON file
+      copy:
+        content: "{{ device_status_response.json | to_nice_json }}"
+        dest: "{{ generated_dir }}/device_status.json"
+      when: device_status_response.json is defined
+
+    - name: Save device control connections to JSON file
+      copy:
+        content: "{{ control_status_response.json | to_nice_json }}"
+        dest: "{{ generated_dir }}/device_control_connections.json"
+      when: control_status_response.json is defined
+
+    - name: Save device monitor status to JSON file
+      copy:
+        content: "{{ monitor_status_response.json | to_nice_json }}"
+        dest: "{{ generated_dir }}/device_monitor_status.json"
+      when: monitor_status_response.json is defined
+
+    - name: Create device status summary
+      copy:
+        content: |
+          SD-WAN Device Status Summary
+          ===========================
+          
+          Timestamp: {{ ansible_date_time.iso8601 }}
+          vManage Host: {{ vmanage_host }}
+          Username: {{ vmanage_username }}
+          
+          Device Status Query Results:
+          - Main Device Status: {{ 'SUCCESS' if device_status_response.status == 200 else 'FAILED' }}
+          - Control Connections: {{ 'SUCCESS' if control_status_response.status == 200 else 'FAILED' }}
+          - Monitor Status: {{ 'SUCCESS' if monitor_status_response.status == 200 else 'FAILED' }}
+          
+          Total Devices Found: {{ device_status_response.json.data | length if device_status_response.json.data is defined else 0 }}
+          
+          Files Generated:
+          - {{ generated_dir }}/device_status.json
+          - {{ generated_dir }}/device_control_connections.json
+          - {{ generated_dir }}/device_monitor_status.json
+          - {{ generated_dir }}/device_status_summary.txt
+          
+        dest: "{{ generated_dir }}/device_status_summary.txt"
+
+    - name: Display completion message
+      debug:
+        msg: |
+          ================================
+          DEVICE STATUS CHECK COMPLETED
+          ================================
+          Files saved in: {{ generated_dir }}
