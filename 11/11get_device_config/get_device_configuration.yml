@@ -1,1 +1,201 @@
+---
+- name: SD-WAN Get Device Configuration
+  hosts: localhost
+  gather_facts: true
+  connection: local
 
+  vars:
+    # Use environment variables for credentials
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    
+    # Output directory
+    generated_dir: "{{ playbook_dir }}/../generated"
+    
+    # Device filter options (can be modified as needed)
+    device_type: "vedge"  # Options: vedge, vmanage, vsmart, vbond
+    device_id: ""  # Leave empty to get all devices, or specify device ID
+
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+        - vmanage_port
+
+    - name: Create generated directory
+      file:
+        path: "{{ generated_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Test vManage connectivity
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: connectivity_test
+      ignore_errors: true
+
+    - name: Fail if connectivity test failed
+      fail:
+        msg: "Cannot connect to vManage at {{ vmanage_host }}"
+      when: connectivity_test.status != 200
+
+    - name: Get list of all devices
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: device_list
+
+    - name: Filter devices by type
+      set_fact:
+        filtered_devices: "{{ device_list.json.data | selectattr('device-type', 'equalto', device_type) | list }}"
+      when: device_type != ""
+
+    - name: Use all devices if no filter specified
+      set_fact:
+        filtered_devices: "{{ device_list.json.data }}"
+      when: device_type == ""
+
+    - name: Filter by specific device ID if provided
+      set_fact:
+        filtered_devices: "{{ filtered_devices | selectattr('deviceId', 'equalto', device_id) | list }}"
+      when: device_id != ""
+
+    - name: Get device configuration using alternative endpoint
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/config/attached/{{ item['uuid'] }}"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 120
+        headers:
+          Content-Type: "application/json"
+      register: device_configs
+      loop: "{{ filtered_devices }}"
+      ignore_errors: true
+      when: filtered_devices | length > 0
+
+    - name: Get device RMA details as fallback
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/rma/{{ item['deviceId'] }}"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 120
+        headers:
+          Content-Type: "application/json"
+      register: device_rma
+      loop: "{{ filtered_devices }}"
+      ignore_errors: true
+      when: filtered_devices | length > 0
+
+    - name: Save device configurations to files
+      copy:
+        content: |
+          Device ID: {{ item.item['deviceId'] }}
+          Device Type: {{ item.item['device-type'] }}
+          Hostname: {{ item.item['host-name'] }}
+          System IP: {{ item.item['system-ip'] }}
+          Site ID: {{ item.item['site-id'] }}
+          Status: {{ item.item['status'] }}
+          Version: {{ item.item['version'] }}
+          UUID: {{ item.item['uuid'] }}
+          Reachability: {{ item.item['reachability'] }}
+          
+          Configuration Data:
+          {% if item.status == 200 and item.json is defined %}
+          {{ item.json | to_nice_json }}
+          {% else %}
+          Error: {{ item.json.error.message if item.json is defined and item.json.error is defined else 'Configuration not available' }}
+          Details: {{ item.json.error.details if item.json is defined and item.json.error is defined else 'No additional details' }}
+          {% endif %}
+        dest: "{{ generated_dir }}/device_config_{{ item.item['deviceId'] }}.txt"
+        mode: '0644'
+      loop: "{{ device_configs.results }}"
+      when: 
+        - device_configs is defined
+        - device_configs.results | length > 0
+
+    - name: Save device RMA details to files
+      copy:
+        content: |
+          Device ID: {{ item.item['deviceId'] }}
+          Device Type: {{ item.item['device-type'] }}
+          Hostname: {{ item.item['host-name'] }}
+          System IP: {{ item.item['system-ip'] }}
+          Site ID: {{ item.item['site-id'] }}
+          Status: {{ item.item['status'] }}
+          Version: {{ item.item['version'] }}
+          UUID: {{ item.item['uuid'] }}
+          Reachability: {{ item.item['reachability'] }}
+          
+          RMA Details:
+          {% if item.status == 200 and item.json is defined %}
+          {{ item.json | to_nice_json }}
+          {% else %}
+          Error: {{ item.json.error.message if item.json is defined and item.json.error is defined else 'RMA details not available' }}
+          Details: {{ item.json.error.details if item.json is defined and item.json.error is defined else 'No additional details' }}
+          {% endif %}
+        dest: "{{ generated_dir }}/device_rma_{{ item.item['deviceId'] }}.txt"
+        mode: '0644'
+      loop: "{{ device_rma.results }}"
+      when: 
+        - device_rma is defined
+        - device_rma.results | length > 0
+
+    - name: Save device inventory summary
+      copy:
+        content: |
+          SD-WAN Device Configuration Summary
+          ==================================
+          vManage Host: {{ vmanage_host }}
+          Total Devices Found: {{ device_list.json.data | length }}
+          Filtered Devices: {{ filtered_devices | length }}
+          Device Type Filter: {{ device_type if device_type != "" else "All types" }}
+          Device ID Filter: {{ device_id if device_id != "" else "All devices" }}
+          
+          Device Details:
+          {% for device in filtered_devices %}
+          - Device ID: {{ device['deviceId'] }}
+            Hostname: {{ device['host-name'] }}
+            Type: {{ device['device-type'] }}
+            System IP: {{ device['system-ip'] }}
+            Site ID: {{ device['site-id'] }}
+            Status: {{ device['status'] }}
+            Version: {{ device['version'] }}
+          {% endfor %}
+        dest: "{{ generated_dir }}/device_inventory_summary.txt"
+        mode: '0644'
+      when: filtered_devices | length > 0
+
+    - name: Display results
+      debug:
+        msg: |
+          Device configuration fetch completed
+          Total devices processed: {{ filtered_devices | length }}
+          Configuration files saved to: {{ generated_dir }}
