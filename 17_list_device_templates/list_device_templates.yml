@@ -1,1 +1,82 @@
+---
+- name: SD-WAN List Device Templates - Use Case 17
+  hosts: localhost
+  gather_facts: true
+  connection: local
 
+  vars:
+    # Use environment variables for credentials
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    
+    # Output directory
+    generated_dir: "{{ playbook_dir }}/../generated"
+
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+        - vmanage_port
+
+    - name: Create generated directory
+      file:
+        path: "{{ generated_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Test vManage connectivity
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: connectivity_test
+      ignore_errors: true
+
+    - name: Fail if connectivity test failed
+      fail:
+        msg: "Cannot connect to vManage at {{ vmanage_host }}"
+      when: connectivity_test.status != 200
+
+    - name: Get device templates list
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/device"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: device_templates_response
+
+    - name: Save device templates to JSON file
+      copy:
+        content: "{{ device_templates_response.json | to_nice_json }}"
+        dest: "{{ generated_dir }}/device_templates.json"
+
+    - name: Create device templates summary CSV
+      copy:
+        content: |
+          Template ID,Template Name,Device Type,Factory Default,Last Updated,Created By,Attached Devices,Template Description
+          {% for template in device_templates_response.json.data %}
+          {{ template.templateId | default('N/A') }},{{ template.templateName | default('N/A') }},{{ template.deviceType | default([]) | join(';') }},{{ template.factoryDefault | default('N/A') }},{{ template.lastUpdatedOn | default('N/A') }},{{ template.createdBy | default('N/A') }},{{ template.devicesAttached | default('0') }},{{ template.templateDescription | default('N/A') }}
+          {% endfor %}
+        dest: "{{ generated_dir }}/device_templates_summary.csv"
+
+    - name: Display device templates count
+      debug:
+        msg: "Successfully retrieved {{ device_templates_response.json.data | length }} device templates"
