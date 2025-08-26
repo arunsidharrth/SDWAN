@@ -1,1 +1,82 @@
+---
+- name: SD-WAN List Feature Templates - Use Case 15
+  hosts: localhost
+  gather_facts: true
+  connection: local
 
+  vars:
+    # Use environment variables for credentials
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    
+    # Output directory
+    generated_dir: "{{ playbook_dir }}/../generated"
+
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+        - vmanage_port
+
+    - name: Create generated directory
+      file:
+        path: "{{ generated_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Test vManage connectivity
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: connectivity_test
+      ignore_errors: true
+
+    - name: Fail if connectivity test failed
+      fail:
+        msg: "Cannot connect to vManage at {{ vmanage_host }}"
+      when: connectivity_test.status != 200
+
+    - name: Get feature templates list
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/feature"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: feature_templates_response
+
+    - name: Save feature templates to JSON file
+      copy:
+        content: "{{ feature_templates_response.json | to_nice_json }}"
+        dest: "{{ generated_dir }}/feature_templates.json"
+
+    - name: Create feature templates summary CSV
+      copy:
+        content: |
+          Template ID,Template Name,Template Type,Device Type,Factory Default,Last Updated
+          {% for template in feature_templates_response.json.data %}
+          {{ template.templateId }},{{ template.templateName }},{{ template.templateType }},{{ template.deviceType | join(';') }},{{ template.factoryDefault }},{{ template.lastUpdatedOn }}
+          {% endfor %}
+        dest: "{{ generated_dir }}/feature_templates_summary.csv"
+
+    - name: Display feature templates count
+      debug:
+        msg: "Successfully retrieved {{ feature_templates_response.json.data | length }} feature templates"
