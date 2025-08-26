@@ -1,1 +1,161 @@
+---
+- name: SD-WAN Get Feature Template - Use Case 16
+  hosts: localhost
+  gather_facts: true
+  connection: local
 
+  vars:
+    # Use environment variables for credentials
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    
+    # Template ID to retrieve (can be overridden with -e template_id=xxxxx)
+    template_id: "{{ lookup('env', 'TEMPLATE_ID') | default('') }}"
+    
+    # Option to use first available template if no ID provided
+    use_first_template: "{{ lookup('env', 'USE_FIRST_TEMPLATE') | default('true') }}"
+    
+    # Output directory
+    generated_dir: "{{ playbook_dir }}/../generated"
+
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+        - vmanage_port
+
+    - name: Debug template_id and use_first_template values
+      debug:
+        msg: |
+          template_id: '{{ template_id }}'
+          use_first_template: '{{ use_first_template }}'
+          template_id is empty: {{ template_id == '' }}
+          use_first_template is true: {{ use_first_template == 'true' }}
+
+    - name: Get feature templates list (if no template ID provided)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/feature"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: feature_templates_list
+      when: template_id | length == 0
+
+    - name: Set template ID to first available template
+      set_fact:
+        template_id: "{{ feature_templates_list.json.data[0].templateId }}"
+      when: 
+        - template_id | length == 0
+        - feature_templates_list is defined
+        - feature_templates_list.json.data is defined
+        - feature_templates_list.json.data | length > 0
+
+    - name: Display selected template info
+      debug:
+        msg: |
+          Using template:
+          - ID: {{ template_id }}
+          - Name: {{ feature_templates_list.json.data[0].templateName | default('N/A') }}
+          - Type: {{ feature_templates_list.json.data[0].templateType | default('N/A') }}
+      when: 
+        - feature_templates_list is defined
+        - feature_templates_list.json.data is defined
+        - feature_templates_list.json.data | length > 0
+
+    - name: Fail if no template ID available
+      fail:
+        msg: "No template ID provided and no templates found. Use -e template_id=xxxxx or set TEMPLATE_ID environment variable"
+      when: template_id | length == 0
+
+    - name: Create generated directory
+      file:
+        path: "{{ generated_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Test vManage connectivity
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: connectivity_test
+      ignore_errors: true
+
+    - name: Fail if connectivity test failed
+      fail:
+        msg: "Cannot connect to vManage at {{ vmanage_host }}"
+      when: connectivity_test.status != 200
+
+    - name: Get specific feature template
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/feature/object/{{ template_id }}"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: feature_template_response
+
+    - name: Save feature template to JSON file
+      copy:
+        content: "{{ feature_template_response.json | to_nice_json }}"
+        dest: "{{ generated_dir }}/feature_template_{{ template_id }}.json"
+
+    - name: Extract template definition if present
+      copy:
+        content: "{{ feature_template_response.json.templateDefinition | to_nice_json }}"
+        dest: "{{ generated_dir }}/feature_template_definition_{{ template_id }}.json"
+      when: feature_template_response.json.templateDefinition is defined
+
+    - name: Create feature template summary
+      copy:
+        content: |
+          Feature Template Details - ID: {{ template_id }}
+          ================================================
+          
+          Template Name: {{ feature_template_response.json.templateName | default('N/A') }}
+          Template Type: {{ feature_template_response.json.templateType | default('N/A') }}
+          Device Types: {{ feature_template_response.json.deviceType | default([]) | join(', ') }}
+          Factory Default: {{ feature_template_response.json.factoryDefault | default('N/A') }}
+          Template Description: {{ feature_template_response.json.templateDescription | default('N/A') }}
+          Created On: {{ feature_template_response.json.createdOn | default('N/A') }}
+          Created By: {{ feature_template_response.json.createdBy | default('N/A') }}
+          Last Updated On: {{ feature_template_response.json.lastUpdatedOn | default('N/A') }}
+          Last Updated By: {{ feature_template_response.json.lastUpdatedBy | default('N/A') }}
+          Template ID: {{ feature_template_response.json.templateId | default('N/A') }}
+          
+          Configuration Present: {{ 'Yes' if feature_template_response.json.templateDefinition is defined else 'No' }}
+          {% if feature_template_response.json.templateDefinition is defined %}
+          Configuration saved to: feature_template_definition_{{ template_id }}.json
+          {% endif %}
+        dest: "{{ generated_dir }}/feature_template_summary_{{ template_id }}.txt"
+
+    - name: Display feature template information
+      debug:
+        msg: |
+          Successfully retrieved feature template:
+          - Template ID: {{ template_id }}
+          - Template Name: {{ feature_template_response.json.templateName | default('N/A') }}
+          - Template Type: {{ feature_template_response.json.templateType | default('N/A') }}
+          - Device Types: {{ feature_template_response.json.deviceType | default([]) | join(', ') }}
