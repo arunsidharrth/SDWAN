@@ -1,1 +1,281 @@
+---
+- name: Get Template State - vManage 20.15
+  hosts: localhost
+  gather_facts: true
+  connection: local
+  
+  vars:
+    # Use environment variables for credentials
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    
+    # Output directory configuration
+    generated_dir: "{{ playbook_dir }}/../generated/templates"
+    
+    # Template variables
+    template_id: "{{ lookup('env', 'TEMPLATE_ID') | default('') }}"
+    template_name: "{{ lookup('env', 'TEMPLATE_NAME') | default('') }}"
+    
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+        - vmanage_port
 
+    - name: Display connection information (without password)
+      debug:
+        msg: |
+          Connection Details:
+          Host: {{ vmanage_host }}
+          Username: {{ vmanage_username }}
+          Port: {{ vmanage_port }}
+          Password: [PROTECTED]
+          Output Directory: {{ generated_dir }}
+
+    - name: Create generated directory
+      file:
+        path: "{{ generated_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Test vManage connectivity
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: connectivity_test
+      ignore_errors: true
+
+    - name: Fail if connectivity test failed
+      fail:
+        msg: "Cannot connect to vManage at {{ vmanage_host }}"
+      when: connectivity_test.status != 200
+
+    - name: Get all device templates
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/device"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: device_templates_response
+
+    - name: Find template by name if template_name is provided
+      set_fact:
+        found_template: "{{ device_templates_response.json.data | selectattr('templateName', 'equalto', template_name) | first }}"
+      when: template_name != "" and device_templates_response.json.data is defined
+      ignore_errors: true
+
+    - name: Set template_id from found template
+      set_fact:
+        template_id: "{{ found_template.templateId }}"
+      when: found_template is defined
+
+    - name: Filter templates based on criteria
+      set_fact:
+        target_templates: >-
+          {%- if template_id != "" -%}
+          {{ device_templates_response.json.data | selectattr('templateId', 'equalto', template_id) | list }}
+          {%- else -%}
+          {{ device_templates_response.json.data | list }}
+          {%- endif -%}
+
+    - name: Get template object details for each target template
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/device/object/{{ item.templateId }}"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: template_objects
+      loop: "{{ target_templates | list }}"
+      loop_control:
+        label: "{{ item.templateName }}"
+      ignore_errors: true
+
+    - name: Get template input variables for each target template
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/device/config/input"
+        method: POST
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          templateId: "{{ item.templateId }}"
+          deviceIds: []
+          isEdited: false
+          isMasterEdited: false
+      register: template_inputs
+      loop: "{{ target_templates | list }}"
+      loop_control:
+        label: "{{ item.templateName }}"
+      ignore_errors: true
+
+    - name: Get devices attached to each template
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/device/config/attached/{{ item.templateId }}"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: template_attachments
+      loop: "{{ target_templates | list }}"
+      loop_control:
+        label: "{{ item.templateName }}"
+      ignore_errors: true
+
+    - name: Initialize template states list
+      set_fact:
+        template_states: []
+
+    - name: Build template state information for each template
+      set_fact:
+        template_states: "{{ template_states + [current_template_state] }}"
+      vars:
+        current_template_state:
+          templateName: "{{ target_templates[ansible_loop.index0].templateName }}"
+          templateId: "{{ target_templates[ansible_loop.index0].templateId }}"
+          templateDescription: "{{ target_templates[ansible_loop.index0].templateDescription }}"
+          deviceType: "{{ target_templates[ansible_loop.index0].deviceType }}"
+          configType: "{{ target_templates[ansible_loop.index0].configType }}"
+          factoryDefault: "{{ target_templates[ansible_loop.index0].factoryDefault }}"
+          devicesAttached: "{{ target_templates[ansible_loop.index0].devicesAttached }}"
+          templateAttached: "{{ target_templates[ansible_loop.index0].templateAttached }}"
+          lastUpdatedBy: "{{ target_templates[ansible_loop.index0].lastUpdatedBy }}"
+          lastUpdatedOn: "{{ target_templates[ansible_loop.index0].lastUpdatedOn }}"
+          draftMode: "{{ target_templates[ansible_loop.index0].draftMode }}"
+          templateObject: "{{ template_objects.results[ansible_loop.index0].json | default({}) }}"
+          templateInputs: "{{ template_inputs.results[ansible_loop.index0].json | default({}) }}"
+          attachedDevices: "{{ template_attachments.results[ansible_loop.index0].json | default({}) }}"
+      loop: "{{ target_templates | list }}"
+      loop_control:
+        extended: true
+        label: "{{ item.templateName }}"
+
+    - name: Save individual template state files
+      copy:
+        content: "{{ item | to_nice_json }}"
+        dest: "{{ generated_dir }}/template_state_{{ item.templateId }}.json"
+      loop: "{{ template_states }}"
+      loop_control:
+        label: "{{ item.templateName }}"
+
+    - name: Save consolidated template states file
+      copy:
+        content: "{{ template_states | to_nice_json }}"
+        dest: "{{ generated_dir }}/all_template_states.json"
+      when: template_id == ""
+
+    - name: Create template state summary
+      copy:
+        content: |
+          Template State Summary
+          =====================
+          
+          vManage Host: {{ vmanage_host }}
+          Request Time: {{ ansible_date_time.iso8601 }}
+          
+          {% if template_id != "" %}
+          Specific Template Query:
+          - Template ID: {{ template_id }}
+          - Template Name: {{ template_states[0].templateName if template_states | length > 0 else 'Not Found' }}
+          - Status: {{ 'Found' if template_states | length > 0 else 'Not Found' }}
+          {% else %}
+          Total Templates Processed: {{ template_states | length }}
+          {% endif %}
+          
+          Output Directory: {{ generated_dir }}
+          
+          Template State Details:
+          {% for state in template_states %}
+          
+          Template: {{ state.templateName }}
+          =========================================
+          - Template ID: {{ state.templateId }}
+          - Description: {{ state.templateDescription }}
+          - Device Type: {{ state.deviceType }}
+          - Configuration Type: {{ state.configType }}
+          - Factory Default: {{ state.factoryDefault }}
+          - Devices Attached: {{ state.devicesAttached }}
+          - Template Attached Count: {{ state.templateAttached }}
+          - Last Updated By: {{ state.lastUpdatedBy }}
+          - Last Updated On: {{ state.lastUpdatedOn }}
+          - Draft Mode: {{ state.draftMode }}
+          - Template Object Available: {{ 'Yes' if state.templateObject is defined else 'No' }}
+          - Input Variables Available: {{ 'Yes' if state.templateInputs is defined else 'No' }}
+          - Attached Devices Info Available: {{ 'Yes' if state.attachedDevices is defined else 'No' }}
+          
+          {% if state.templateInputs is defined and state.templateInputs.data is defined %}
+          Input Variables Required:
+          {% for input_row in state.templateInputs.data %}
+          {% for key, value in input_row.items() %}
+          {% if key not in ['csv-status', 'csv-deviceId', 'csv-deviceIP', 'csv-host-name'] %}
+          - {{ key }}: {{ value if value != '' else '[REQUIRED]' }}
+          {% endif %}
+          {% endfor %}
+          {% endfor %}
+          {% endif %}
+          
+          {% endfor %}
+          
+          Files Generated:
+          {% for state in template_states %}
+          - template_state_{{ state.templateId }}.json ({{ state.templateName }})
+          {% endfor %}
+          {% if template_id == "" %}
+          - all_template_states.json (consolidated file)
+          {% endif %}
+        dest: "{{ generated_dir }}/template_state_summary.txt"
+
+    - name: Display completion message
+      debug:
+        msg: |
+          Template state retrieval completed successfully
+          Results saved to: {{ generated_dir }}
+          
+          {% if template_id != "" %}
+          Specific template processed: {{ template_states[0].templateName if template_states | length > 0 else 'Template not found' }}
+          Template state file: template_state_{{ template_id }}.json
+          {% else %}
+          Total templates processed: {{ template_states | length }}
+          Individual template files created for each template
+          Consolidated file: all_template_states.json
+          {% endif %}
+          
+          Summary file: template_state_summary.txt
+          
+          Template state information includes:
+          - Basic template metadata
+          - Template object details (feature templates, general templates, etc.)
+          - Required input variables
+          - Attached device information
