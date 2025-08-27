@@ -1,1 +1,198 @@
-
+---
+- name: Get Template Input - Use Case 19
+  hosts: localhost
+  gather_facts: true
+  connection: local
+  
+  vars:
+    # Use environment variables for credentials
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    
+    # Directory structure
+    generated_dir: "{{ playbook_dir }}/../generated"
+    
+    # Template variables - will be empty unless provided via -e
+    template_id: ""
+    template_name: ""
+    template_type: "device"  # device or feature
+  
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+        - vmanage_port
+    
+    - name: Create generated directory
+      file:
+        path: "{{ generated_dir }}"
+        state: directory
+        mode: '0755'
+    
+    - name: Test vManage connectivity
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: connectivity_test
+      ignore_errors: true
+    
+    - name: Fail if connectivity test failed
+      fail:
+        msg: "Cannot connect to vManage at {{ vmanage_host }}"
+      when: connectivity_test.status != 200
+    
+    - name: Get all device templates (if no specific template provided)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/device"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: device_templates
+      when: template_id == "" and template_name == "" and template_type == "device"
+    
+    - name: Get all feature templates (if no specific template provided)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/feature"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: feature_templates
+      when: template_id == "" and template_name == "" and template_type == "feature"
+    
+    - name: Find device template by name (if template_name provided)
+      set_fact:
+        template_id: "{{ item.templateId }}"
+      loop: "{{ device_templates.json.data }}"
+      when: 
+        - template_name != ""
+        - template_type == "device"
+        - item.templateName == template_name
+      loop_control:
+        loop_var: item
+    
+    - name: Find feature template by name (if template_name provided)
+      set_fact:
+        template_id: "{{ item.templateId }}"
+      loop: "{{ feature_templates.json.data }}"
+      when: 
+        - template_name != ""
+        - template_type == "feature"
+        - item.templateName == template_name
+      loop_control:
+        loop_var: item
+    
+    - name: Get device template input
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/device/config/input/{{ template_id }}"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: device_template_input
+      when: template_id != "" and template_type == "device"
+    
+    - name: Get feature template input
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/feature/types"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: feature_types
+      when: template_id != "" and template_type == "feature"
+    
+    - name: Get specific feature template details
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/feature/object/{{ template_id }}"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: feature_template_details
+      when: template_id != "" and template_type == "feature"
+    
+    - name: Save device templates list
+      copy:
+        content: "{{ device_templates.json | to_nice_json }}"
+        dest: "{{ generated_dir }}/device_templates.json"
+      when: device_templates is defined
+    
+    - name: Save feature templates list
+      copy:
+        content: "{{ feature_templates.json | to_nice_json }}"
+        dest: "{{ generated_dir }}/feature_templates.json"
+      when: feature_templates is defined and feature_templates.json is defined
+    
+    - name: Save device template input
+      copy:
+        content: "{{ device_template_input.json | to_nice_json }}"
+        dest: "{{ generated_dir }}/device_template_input_{{ template_id }}.json"
+      when: device_template_input is defined and device_template_input.json is defined
+    
+    - name: Save feature template details
+      copy:
+        content: "{{ feature_template_details.json | to_nice_json }}"
+        dest: "{{ generated_dir }}/feature_template_details_{{ template_id }}.json"
+      when: feature_template_details is defined and feature_template_details.json is defined
+    
+    - name: Save feature types
+      copy:
+        content: "{{ feature_types.json | to_nice_json }}"
+        dest: "{{ generated_dir }}/feature_types.json"
+      when: feature_types is defined and feature_types.json is defined
+    
+    - name: Create CSV report for device template input
+      copy:
+        content: |
+          Template ID,Template Name,Parameter Name,Parameter Type,Data Type,Required,Default Value,Description
+          {% for item in device_template_input.json.data %}
+          {% for column in item.columns %}
+          {{ template_id }},{{ item.templateName | default('N/A') }},{{ column.property }},{{ column.dataType }},{{ column.dataType }},{{ column.editable | default('N/A') }},{{ column.defaultValue | default('N/A') }},{{ column.title | default('N/A') }}
+          {% endfor %}
+          {% endfor %}
+        dest: "{{ generated_dir }}/device_template_input_{{ template_id }}.csv"
+      when: device_template_input is defined and device_template_input.json.data is defined
+    
+    - name: Create CSV report for feature template details
+      copy:
+        content: |
+          Template ID,Template Name,Template Type,Device Type,Parameter Name,Data Type,Default Value,Description
+          {{ template_id }},{{ feature_template_details.json.templateName | default('N/A') }},{{ feature_template_details.json.templateType | default('N/A') }},{{ feature_template_details.json.deviceType | default('N/A') }},Template Configuration,Object,N/A,Feature Template Definition
+        dest: "{{ generated_dir }}/feature_template_details_{{ template_id }}.csv"
+      when: feature_template_details is defined
