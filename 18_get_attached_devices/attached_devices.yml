@@ -1,1 +1,156 @@
-
+---
+- name: Get Attached Devices - Use Case 18
+  hosts: localhost
+  gather_facts: true
+  connection: local
+  
+  vars:
+    # Use environment variables for credentials
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    
+    # Directory structure
+    generated_dir: "{{ playbook_dir }}/../generated"
+    
+    # Template variables - will be empty unless provided via -e
+    template_id: ""
+    template_name: ""
+  
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+        - vmanage_port
+    
+    - name: Create generated directory
+      file:
+        path: "{{ generated_dir }}"
+        state: directory
+        mode: '0755'
+    
+    - name: Test vManage connectivity
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: connectivity_test
+      ignore_errors: true
+    
+    - name: Fail if connectivity test failed
+      fail:
+        msg: "Cannot connect to vManage at {{ vmanage_host }}"
+      when: connectivity_test.status != 200
+    
+    - name: Get all device templates (if no specific template provided)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/device"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: device_templates
+      when: template_id == "" and template_name == ""
+    
+    - name: Find template by name (if template_name provided)
+      set_fact:
+        template_id: "{{ item.templateId }}"
+      loop: "{{ device_templates.json.data }}"
+      when: 
+        - template_name != ""
+        - item.templateName == template_name
+      loop_control:
+        loop_var: item
+    
+    - name: Get attached devices for specific template
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/device/config/attached/{{ template_id }}"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: attached_devices
+      when: template_id != ""
+    
+    - name: Get device status (all devices) to find attached devices
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: all_devices
+      when: template_id == "" and template_name == ""
+    
+    - name: Filter devices with attached templates
+      set_fact:
+        all_attached_devices:
+          json:
+            data: "{{ all_devices.json.data | selectattr('template', 'defined') | selectattr('template', '!=', '') | list }}"
+      when: all_devices is defined
+    
+    - name: Save device templates list
+      copy:
+        content: "{{ device_templates.json | to_nice_json }}"
+        dest: "{{ generated_dir }}/device_templates.json"
+      when: device_templates is defined
+    
+    - name: Save attached devices for specific template
+      copy:
+        content: "{{ attached_devices.json | to_nice_json }}"
+        dest: "{{ generated_dir }}/attached_devices_{{ template_id }}.json"
+      when: 
+        - attached_devices is defined
+        - template_id != ""
+    
+    - name: Save all attached devices
+      copy:
+        content: "{{ all_attached_devices.json | to_nice_json }}"
+        dest: "{{ generated_dir }}/all_attached_devices.json"
+      when: all_attached_devices is defined
+    
+    - name: Create CSV report for attached devices (specific template)
+      copy:
+        content: |
+          Device UUID,Device Name,Device Type,Template Name,Template ID,Site ID,Host Name,System IP,Device Model,Version,Status
+          {% for device in attached_devices.json.data %}
+          {{ device['uuid'] | default('N/A') }},{{ device['host-name'] | default('N/A') }},{{ device['deviceType'] | default('N/A') }},{{ device['templateName'] | default('N/A') }},{{ device['templateId'] | default('N/A') }},{{ device['site-id'] | default('N/A') }},{{ device['host-name'] | default('N/A') }},{{ device['system-ip'] | default('N/A') }},{{ device['deviceModel'] | default('N/A') }},{{ device['version'] | default('N/A') }},{{ device['configOperationMode'] | default('N/A') }}
+          {% endfor %}
+        dest: "{{ generated_dir }}/attached_devices_{{ template_id }}.csv"
+      when: 
+        - attached_devices is defined
+        - template_id != ""
+    
+    - name: Create CSV report for all attached devices
+      copy:
+        content: |
+          Device UUID,Device Name,Device Type,Template Name,Template ID,Site ID,Host Name,System IP,Device Model,Version,Status
+          {% for device in all_attached_devices.json.data %}
+          {{ device['uuid'] | default('N/A') }},{{ device['host-name'] | default('N/A') }},{{ device['deviceType'] | default('N/A') }},{{ device['templateName'] | default('N/A') }},{{ device['templateId'] | default('N/A') }},{{ device['site-id'] | default('N/A') }},{{ device['host-name'] | default('N/A') }},{{ device['system-ip'] | default('N/A') }},{{ device['deviceModel'] | default('N/A') }},{{ device['version'] | default('N/A') }},{{ device['configOperationMode'] | default('N/A') }}
+          {% endfor %}
+        dest: "{{ generated_dir }}/all_attached_devices.csv"
+      when: all_attached_devices is defined
