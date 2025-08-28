@@ -1,1 +1,167 @@
+---
+- name: Use Case 21 - List All Policies from vManage
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  
+  vars:
+    # Use environment variables for credentials
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    
+    # Generated directory structure
+    generated_dir: "{{ playbook_dir }}/../generated"
+    policies_dir: "{{ generated_dir }}/policies"
+    
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+        - vmanage_port
 
+    - name: Create generated directory structure
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ generated_dir }}"
+        - "{{ policies_dir }}"
+
+    - name: Test vManage connectivity
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: connectivity_test
+      ignore_errors: true
+
+    - name: Fail if connectivity test failed
+      fail:
+        msg: "Cannot connect to vManage at {{ vmanage_host }}"
+      when: connectivity_test.status != 200
+
+    - name: Get all centralized policies
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/vsmart"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: centralized_policies
+      ignore_errors: true
+
+    - name: Get all localized policies
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/vedge"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: localized_policies
+      ignore_errors: true
+
+    - name: Get all policy definitions
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/definition"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: policy_definitions
+      ignore_errors: true
+
+    - name: Get all security policies
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/security"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: security_policies
+      ignore_errors: true
+
+    - name: Save centralized policies to file
+      copy:
+        content: "{{ centralized_policies.json | to_nice_json(indent=2) }}"
+        dest: "{{ policies_dir }}/centralized_policies.json"
+      when: centralized_policies.status == 200 and centralized_policies.json is defined
+
+    - name: Save localized policies to file
+      copy:
+        content: "{{ localized_policies.json | to_nice_json(indent=2) }}"
+        dest: "{{ policies_dir }}/localized_policies.json"
+      when: localized_policies.status == 200 and localized_policies.json is defined
+
+    - name: Save policy definitions to file
+      copy:
+        content: "{{ policy_definitions.json | to_nice_json(indent=2) }}"
+        dest: "{{ policies_dir }}/policy_definitions.json"
+      when: policy_definitions.status == 200 and policy_definitions.json is defined
+
+    - name: Save security policies to file
+      copy:
+        content: "{{ security_policies.json | to_nice_json(indent=2) }}"
+        dest: "{{ policies_dir }}/security_policies.json"
+      when: security_policies.status == 200 and security_policies.json is defined
+
+    - name: Create consolidated policy summary
+      copy:
+        content: |
+          SD-WAN Policy Inventory Summary
+          ==============================
+          
+          Connection Details:
+          - vManage Host: {{ vmanage_host }}
+          - Username: {{ vmanage_username }}
+          - Port: {{ vmanage_port }}
+          
+          Policy Retrieval Results:
+          - Centralized Policies: {{ 'SUCCESS' if centralized_policies.status == 200 else 'FAILED' }} ({{ centralized_policies.json.data | length if centralized_policies.json.data is defined else 0 }} items)
+          - Localized Policies: {{ 'SUCCESS' if localized_policies.status == 200 else 'FAILED' }} ({{ localized_policies.json.data | length if localized_policies.json.data is defined else 0 }} items)
+          - Policy Definitions: {{ 'SUCCESS' if policy_definitions.status == 200 else 'FAILED' }} ({{ policy_definitions.json.data | length if policy_definitions.json.data is defined else 0 }} items)
+          - Security Policies: {{ 'SUCCESS' if security_policies.status == 200 else 'FAILED' }} ({{ security_policies.json.data | length if security_policies.json.data is defined else 0 }} items)
+          
+          Generated Files:
+          {% if centralized_policies.status == 200 %}
+          - {{ policies_dir }}/centralized_policies.json
+          {% endif %}
+          {% if localized_policies.status == 200 %}
+          - {{ policies_dir }}/localized_policies.json
+          {% endif %}
+          {% if policy_definitions.status == 200 %}
+          - {{ policies_dir }}/policy_definitions.json
+          {% endif %}
+          {% if security_policies.status == 200 %}
+          - {{ policies_dir }}/security_policies.json
+          {% endif %}
+        dest: "{{ generated_dir }}/policy_inventory_summary.txt"
