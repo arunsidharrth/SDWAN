@@ -1,1 +1,322 @@
+---
+- name: Use Case 23 - List All Policy Lists from vManage
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  
+  vars:
+    # Use environment variables for credentials
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    
+    # Generated directory structure
+    generated_dir: "{{ playbook_dir }}/../generated"
+    policy_lists_dir: "{{ generated_dir }}/policy_lists"
+    
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+        - vmanage_port
 
+    - name: Create generated directory structure
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ generated_dir }}"
+        - "{{ policy_lists_dir }}"
+
+    - name: Test vManage connectivity
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: connectivity_test
+      ignore_errors: true
+
+    - name: Fail if connectivity test failed
+      fail:
+        msg: "Cannot connect to vManage at {{ vmanage_host }}"
+      when: connectivity_test.status != 200
+
+    - name: Get all policy lists overview
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/list"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: policy_lists_overview
+      ignore_errors: true
+
+    - name: Get site lists
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/list/site"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: site_lists
+      ignore_errors: true
+
+    - name: Get VPN lists
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/list/vpn"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: vpn_lists
+      ignore_errors: true
+
+    - name: Get prefix lists
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/list/prefix"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: prefix_lists
+      ignore_errors: true
+
+    - name: Get application lists
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/list/app"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: application_lists
+      ignore_errors: true
+
+    - name: Get data prefix lists
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/list/dataprefix"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: data_prefix_lists
+      ignore_errors: true
+
+    - name: Get color lists
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/list/color"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: color_lists
+      ignore_errors: true
+
+    - name: Get SLA class lists
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/list/slaClass"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: sla_class_lists
+      ignore_errors: true
+
+    - name: Get policer lists
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/list/policer"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: policer_lists
+      ignore_errors: true
+
+    - name: Get community lists
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/list/community"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: community_lists
+      ignore_errors: true
+
+    - name: Save policy lists overview to file
+      copy:
+        content: "{{ policy_lists_overview.json | to_nice_json(indent=2) }}"
+        dest: "{{ policy_lists_dir }}/policy_lists_overview.json"
+      when: policy_lists_overview.status == 200 and policy_lists_overview.json is defined
+
+    - name: Save site lists to file
+      copy:
+        content: "{{ site_lists.json | to_nice_json(indent=2) }}"
+        dest: "{{ policy_lists_dir }}/site_lists.json"
+      when: site_lists.status == 200 and site_lists.json is defined
+
+    - name: Save VPN lists to file
+      copy:
+        content: "{{ vpn_lists.json | to_nice_json(indent=2) }}"
+        dest: "{{ policy_lists_dir }}/vpn_lists.json"
+      when: vpn_lists.status == 200 and vpn_lists.json is defined
+
+    - name: Save prefix lists to file
+      copy:
+        content: "{{ prefix_lists.json | to_nice_json(indent=2) }}"
+        dest: "{{ policy_lists_dir }}/prefix_lists.json"
+      when: prefix_lists.status == 200 and prefix_lists.json is defined
+
+    - name: Save application lists to file
+      copy:
+        content: "{{ application_lists.json | to_nice_json(indent=2) }}"
+        dest: "{{ policy_lists_dir }}/application_lists.json"
+      when: application_lists.status == 200 and application_lists.json is defined
+
+    - name: Save data prefix lists to file
+      copy:
+        content: "{{ data_prefix_lists.json | to_nice_json(indent=2) }}"
+        dest: "{{ policy_lists_dir }}/data_prefix_lists.json"
+      when: data_prefix_lists.status == 200 and data_prefix_lists.json is defined
+
+    - name: Save color lists to file
+      copy:
+        content: "{{ color_lists.json | to_nice_json(indent=2) }}"
+        dest: "{{ policy_lists_dir }}/color_lists.json"
+      when: color_lists.status == 200 and color_lists.json is defined
+
+    - name: Save SLA class lists to file
+      copy:
+        content: "{{ sla_class_lists.json | to_nice_json(indent=2) }}"
+        dest: "{{ policy_lists_dir }}/sla_class_lists.json"
+      when: sla_class_lists.status == 200 and sla_class_lists.json is defined
+
+    - name: Save policer lists to file
+      copy:
+        content: "{{ policer_lists.json | to_nice_json(indent=2) }}"
+        dest: "{{ policy_lists_dir }}/policer_lists.json"
+      when: policer_lists.status == 200 and policer_lists.json is defined
+
+    - name: Save community lists to file
+      copy:
+        content: "{{ community_lists.json | to_nice_json(indent=2) }}"
+        dest: "{{ policy_lists_dir }}/community_lists.json"
+      when: community_lists.status == 200 and community_lists.json is defined
+
+    - name: Create consolidated policy lists summary
+      copy:
+        content: |
+          SD-WAN Policy Lists Inventory Report
+          ===================================
+          
+          Connection Details:
+          - vManage Host: {{ vmanage_host }}
+          - Username: {{ vmanage_username }}
+          - Port: {{ vmanage_port }}
+          
+          Policy Lists Retrieval Results:
+          - Overview: {{ 'SUCCESS' if policy_lists_overview.status == 200 else 'FAILED' }} ({{ policy_lists_overview.json.data | length if policy_lists_overview.json.data is defined else 0 }} total lists)
+          - Site Lists: {{ 'SUCCESS' if site_lists.status == 200 else 'FAILED' }} ({{ site_lists.json.data | length if site_lists.json.data is defined else 0 }} items)
+          - VPN Lists: {{ 'SUCCESS' if vpn_lists.status == 200 else 'FAILED' }} ({{ vpn_lists.json.data | length if vpn_lists.json.data is defined else 0 }} items)
+          - Prefix Lists: {{ 'SUCCESS' if prefix_lists.status == 200 else 'FAILED' }} ({{ prefix_lists.json.data | length if prefix_lists.json.data is defined else 0 }} items)
+          - Application Lists: {{ 'SUCCESS' if application_lists.status == 200 else 'FAILED' }} ({{ application_lists.json.data | length if application_lists.json.data is defined else 0 }} items)
+          - Data Prefix Lists: {{ 'SUCCESS' if data_prefix_lists.status == 200 else 'FAILED' }} ({{ data_prefix_lists.json.data | length if data_prefix_lists.json.data is defined else 0 }} items)
+          - Color Lists: {{ 'SUCCESS' if color_lists.status == 200 else 'FAILED' }} ({{ color_lists.json.data | length if color_lists.json.data is defined else 0 }} items)
+          - SLA Class Lists: {{ 'SUCCESS' if sla_class_lists.status == 200 else 'FAILED' }} ({{ sla_class_lists.json.data | length if sla_class_lists.json.data is defined else 0 }} items)
+          - Policer Lists: {{ 'SUCCESS' if policer_lists.status == 200 else 'FAILED' }} ({{ policer_lists.json.data | length if policer_lists.json.data is defined else 0 }} items)
+          - Community Lists: {{ 'SUCCESS' if community_lists.status == 200 else 'FAILED' }} ({{ community_lists.json.data | length if community_lists.json.data is defined else 0 }} items)
+          
+          Generated Files:
+          {% if policy_lists_overview.status == 200 %}
+          - {{ policy_lists_dir }}/policy_lists_overview.json
+          {% endif %}
+          {% if site_lists.status == 200 %}
+          - {{ policy_lists_dir }}/site_lists.json
+          {% endif %}
+          {% if vpn_lists.status == 200 %}
+          - {{ policy_lists_dir }}/vpn_lists.json
+          {% endif %}
+          {% if prefix_lists.status == 200 %}
+          - {{ policy_lists_dir }}/prefix_lists.json
+          {% endif %}
+          {% if application_lists.status == 200 %}
+          - {{ policy_lists_dir }}/application_lists.json
+          {% endif %}
+          {% if data_prefix_lists.status == 200 %}
+          - {{ policy_lists_dir }}/data_prefix_lists.json
+          {% endif %}
+          {% if color_lists.status == 200 %}
+          - {{ policy_lists_dir }}/color_lists.json
+          {% endif %}
+          {% if sla_class_lists.status == 200 %}
+          - {{ policy_lists_dir }}/sla_class_lists.json
+          {% endif %}
+          {% if policer_lists.status == 200 %}
+          - {{ policy_lists_dir }}/policer_lists.json
+          {% endif %}
+          {% if community_lists.status == 200 %}
+          - {{ policy_lists_dir }}/community_lists.json
+          {% endif %}
+          
+          Policy List Types Retrieved:
+          - Site Lists: Site groupings and location definitions
+          - VPN Lists: VPN segment and service groupings
+          - Prefix Lists: IP address and subnet groupings
+          - Application Lists: Application and service groupings
+          - Data Prefix Lists: Data plane IP prefix groupings
+          - Color Lists: WAN transport color definitions
+          - SLA Class Lists: Service level agreement classifications
+          - Policer Lists: Traffic policing and rate limiting definitions
+          - Community Lists: BGP community value groupings
+        dest: "{{ generated_dir }}/policy_lists_summary.txt"
