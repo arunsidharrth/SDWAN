@@ -1,1 +1,247 @@
+---
+- name: Use Case 22 - Get Policy Definition Details from vManage
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  
+  vars:
+    # Use environment variables for credentials
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    
+    # Generated directory structure
+    generated_dir: "{{ playbook_dir }}/../generated"
+    policy_definitions_dir: "{{ generated_dir }}/policy_definitions"
+    
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+        - vmanage_port
 
+    - name: Create generated directory structure
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ generated_dir }}"
+        - "{{ policy_definitions_dir }}"
+
+    - name: Test vManage connectivity
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: connectivity_test
+      ignore_errors: true
+
+    - name: Fail if connectivity test failed
+      fail:
+        msg: "Cannot connect to vManage at {{ vmanage_host }}"
+      when: connectivity_test.status != 200
+
+    - name: Get all policy definitions overview
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/definition"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: policy_definitions_overview
+      ignore_errors: true
+
+    - name: Get QoS policy definitions
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/definition/qosmap"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: qos_policy_definitions
+      ignore_errors: true
+
+    - name: Get data policy definitions
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/definition/data"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: data_policy_definitions
+      ignore_errors: true
+
+    - name: Get control policy definitions
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/definition/control"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: control_policy_definitions
+      ignore_errors: true
+
+    - name: Get application-aware routing policy definitions
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/definition/approute"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: approute_policy_definitions
+      ignore_errors: true
+
+    - name: Get access control list definitions
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/definition/acl"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: acl_policy_definitions
+      ignore_errors: true
+
+    - name: Get VPN membership policy definitions
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/definition/vpnmembershipgroup"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: vpn_membership_definitions
+      ignore_errors: true
+
+    - name: Save policy definitions overview to file
+      copy:
+        content: "{{ policy_definitions_overview.json | to_nice_json(indent=2) }}"
+        dest: "{{ policy_definitions_dir }}/policy_definitions_overview.json"
+      when: policy_definitions_overview.status == 200 and policy_definitions_overview.json is defined
+
+    - name: Save QoS policy definitions to file
+      copy:
+        content: "{{ qos_policy_definitions.json | to_nice_json(indent=2) }}"
+        dest: "{{ policy_definitions_dir }}/qos_policy_definitions.json"
+      when: qos_policy_definitions.status == 200 and qos_policy_definitions.json is defined
+
+    - name: Save data policy definitions to file
+      copy:
+        content: "{{ data_policy_definitions.json | to_nice_json(indent=2) }}"
+        dest: "{{ policy_definitions_dir }}/data_policy_definitions.json"
+      when: data_policy_definitions.status == 200 and data_policy_definitions.json is defined
+
+    - name: Save control policy definitions to file
+      copy:
+        content: "{{ control_policy_definitions.json | to_nice_json(indent=2) }}"
+        dest: "{{ policy_definitions_dir }}/control_policy_definitions.json"
+      when: control_policy_definitions.status == 200 and control_policy_definitions.json is defined
+
+    - name: Save application-aware routing policy definitions to file
+      copy:
+        content: "{{ approute_policy_definitions.json | to_nice_json(indent=2) }}"
+        dest: "{{ policy_definitions_dir }}/approute_policy_definitions.json"
+      when: approute_policy_definitions.status == 200 and approute_policy_definitions.json is defined
+
+    - name: Save ACL policy definitions to file
+      copy:
+        content: "{{ acl_policy_definitions.json | to_nice_json(indent=2) }}"
+        dest: "{{ policy_definitions_dir }}/acl_policy_definitions.json"
+      when: acl_policy_definitions.status == 200 and acl_policy_definitions.json is defined
+
+    - name: Save VPN membership policy definitions to file
+      copy:
+        content: "{{ vpn_membership_definitions.json | to_nice_json(indent=2) }}"
+        dest: "{{ policy_definitions_dir }}/vpn_membership_definitions.json"
+      when: vpn_membership_definitions.status == 200 and vpn_membership_definitions.json is defined
+
+    - name: Create consolidated policy definitions summary
+      copy:
+        content: |
+          SD-WAN Policy Definitions Report
+          ===============================
+          
+          Connection Details:
+          - vManage Host: {{ vmanage_host }}
+          - Username: {{ vmanage_username }}
+          - Port: {{ vmanage_port }}
+          
+          Policy Definition Retrieval Results:
+          - Overview: {{ 'SUCCESS' if policy_definitions_overview.status == 200 else 'FAILED' }} ({{ policy_definitions_overview.json.data | length if policy_definitions_overview.json.data is defined else 0 }} total definitions)
+          - QoS Definitions: {{ 'SUCCESS' if qos_policy_definitions.status == 200 else 'FAILED' }} ({{ qos_policy_definitions.json.data | length if qos_policy_definitions.json.data is defined else 0 }} items)
+          - Data Policy Definitions: {{ 'SUCCESS' if data_policy_definitions.status == 200 else 'FAILED' }} ({{ data_policy_definitions.json.data | length if data_policy_definitions.json.data is defined else 0 }} items)
+          - Control Policy Definitions: {{ 'SUCCESS' if control_policy_definitions.status == 200 else 'FAILED' }} ({{ control_policy_definitions.json.data | length if control_policy_definitions.json.data is defined else 0 }} items)
+          - App-Aware Routing Definitions: {{ 'SUCCESS' if approute_policy_definitions.status == 200 else 'FAILED' }} ({{ approute_policy_definitions.json.data | length if approute_policy_definitions.json.data is defined else 0 }} items)
+          - ACL Definitions: {{ 'SUCCESS' if acl_policy_definitions.status == 200 else 'FAILED' }} ({{ acl_policy_definitions.json.data | length if acl_policy_definitions.json.data is defined else 0 }} items)
+          - VPN Membership Definitions: {{ 'SUCCESS' if vpn_membership_definitions.status == 200 else 'FAILED' }} ({{ vpn_membership_definitions.json.data | length if vpn_membership_definitions.json.data is defined else 0 }} items)
+          
+          Generated Files:
+          {% if policy_definitions_overview.status == 200 %}
+          - {{ policy_definitions_dir }}/policy_definitions_overview.json
+          {% endif %}
+          {% if qos_policy_definitions.status == 200 %}
+          - {{ policy_definitions_dir }}/qos_policy_definitions.json
+          {% endif %}
+          {% if data_policy_definitions.status == 200 %}
+          - {{ policy_definitions_dir }}/data_policy_definitions.json
+          {% endif %}
+          {% if control_policy_definitions.status == 200 %}
+          - {{ policy_definitions_dir }}/control_policy_definitions.json
+          {% endif %}
+          {% if approute_policy_definitions.status == 200 %}
+          - {{ policy_definitions_dir }}/approute_policy_definitions.json
+          {% endif %}
+          {% if acl_policy_definitions.status == 200 %}
+          - {{ policy_definitions_dir }}/acl_policy_definitions.json
+          {% endif %}
+          {% if vpn_membership_definitions.status == 200 %}
+          - {{ policy_definitions_dir }}/vpn_membership_definitions.json
+          {% endif %}
+          
+          Policy Definition Types Retrieved:
+          - QoS Maps: Quality of Service policy definitions
+          - Data Policies: Traffic filtering and forwarding rules
+          - Control Policies: Routing and control plane policies
+          - App-Aware Routing: Application-aware path selection
+          - Access Control Lists: Network access control rules
+          - VPN Membership: VPN group and membership definitions
+        dest: "{{ generated_dir }}/policy_definitions_summary.txt"
