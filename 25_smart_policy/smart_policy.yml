@@ -1,1 +1,408 @@
-
+---
+- name: Get vSmart policy - Retrieve vSmart policy
+  hosts: localhost
+  gather_facts: true
+  connection: local
+  vars:
+    # vManage connection details from environment variables
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('admin') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    
+    # Output directory configuration
+    generated_dir: "{{ playbook_dir }}/../generated"
+    policy_output_dir: "{{ generated_dir }}/vsmart_policies"
+    
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+        
+    - name: Create output directory structure
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ generated_dir }}"
+        - "{{ policy_output_dir }}"
+        
+    - name: Authenticate to vManage and get session token
+      uri:
+        url: "https://{{ vmanage_host }}/j_security_check"
+        method: POST
+        body: "j_username={{ vmanage_username }}&j_password={{ vmanage_password }}"
+        headers:
+          Content-Type: "application/x-www-form-urlencoded"
+        validate_certs: false
+        status_code: 200
+      register: auth_response
+      
+    - name: Extract session cookie
+      set_fact:
+        session_cookie: "{{ auth_response.set_cookie }}"
+      
+    - name: Get CSRF token with retry logic
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/client/token"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+        validate_certs: false
+      register: token_response
+      retries: 3
+      delay: 5
+      until: token_response.status == 200
+      ignore_errors: true
+      
+    - name: Set CSRF token or use empty if not available
+      set_fact:
+        csrf_token: "{{ token_response.body | default('') }}"
+        
+    - name: Check if CSRF token is required (test API call)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/vsmart"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          X-XSRF-TOKEN: "{{ csrf_token }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: csrf_test
+      ignore_errors: true
+      
+    - name: List all vSmart policies (with CSRF token)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/vsmart"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          X-XSRF-TOKEN: "{{ csrf_token }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: vsmart_policies_with_csrf
+      when: csrf_test.status == 200
+      ignore_errors: true
+      
+    - name: List all vSmart policies (without CSRF token)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/vsmart"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: vsmart_policies_no_csrf
+      when: csrf_test.status != 200
+      ignore_errors: true
+      
+    - name: Try alternative centralized policy endpoint (with CSRF)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/central"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          X-XSRF-TOKEN: "{{ csrf_token }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: central_policies_with_csrf
+      when: 
+        - csrf_test.status == 200
+        - (vsmart_policies_with_csrf.status | default(0)) != 200
+      ignore_errors: true
+      
+    - name: Try alternative centralized policy endpoint (without CSRF)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/central"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: central_policies_no_csrf
+      when: 
+        - csrf_test.status != 200
+        - (vsmart_policies_no_csrf.status | default(0)) != 200
+      ignore_errors: true
+        
+    - name: Set policies list from successful response
+      set_fact:
+        vsmart_policies_list: "{{ 
+          vsmart_policies_with_csrf if (vsmart_policies_with_csrf.status | default(0)) == 200 else
+          vsmart_policies_no_csrf if (vsmart_policies_no_csrf.status | default(0)) == 200 else
+          central_policies_with_csrf if (central_policies_with_csrf.status | default(0)) == 200 else
+          central_policies_no_csrf if (central_policies_no_csrf.status | default(0)) == 200 else
+          {'json': {'data': []}}
+        }}"
+        use_csrf: "{{ csrf_test.status == 200 }}"
+        api_endpoint_used: "{{ 
+          '/dataservice/template/policy/vsmart' if (vsmart_policies_with_csrf.status | default(0)) == 200 or (vsmart_policies_no_csrf.status | default(0)) == 200 else
+          '/dataservice/template/policy/central' if (central_policies_with_csrf.status | default(0)) == 200 or (central_policies_no_csrf.status | default(0)) == 200 else
+          'none_successful'
+        }}"
+        
+    - name: Display API status information
+      debug:
+        msg: |
+          API Status Summary:
+          - vSmart Policy Endpoint (with CSRF): {{ vsmart_policies_with_csrf.status | default('N/A') }}
+          - vSmart Policy Endpoint (without CSRF): {{ vsmart_policies_no_csrf.status | default('N/A') }}
+          - Central Policy Endpoint (with CSRF): {{ central_policies_with_csrf.status | default('N/A') }}
+          - Central Policy Endpoint (without CSRF): {{ central_policies_no_csrf.status | default('N/A') }}
+          - Using CSRF Token: {{ use_csrf }}
+          - Successful API Endpoint: {{ api_endpoint_used }}
+          - Policies Found: {{ vsmart_policies_list.json.data | default([]) | length }}
+        
+    - name: Save vSmart policies list
+      copy:
+        content: "{{ vsmart_policies_list.json | to_nice_json }}"
+        dest: "{{ policy_output_dir }}/vsmart_policies_list.json"
+      when: 
+        - vsmart_policies_list.json is defined
+        - api_endpoint_used != 'none_successful'
+        
+    - name: Get details for each vSmart policy (with CSRF)
+      uri:
+        url: "https://{{ vmanage_host }}{{ api_endpoint_used }}/definition/{{ item.policyId }}"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          X-XSRF-TOKEN: "{{ csrf_token }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: policy_details_with_csrf
+      loop: "{{ vsmart_policies_list.json.data | default([]) }}"
+      when: 
+        - vsmart_policies_list.json.data is defined
+        - vsmart_policies_list.json.data | length > 0
+        - use_csrf
+        - api_endpoint_used != 'none_successful'
+      ignore_errors: true
+        
+    - name: Get details for each vSmart policy (without CSRF)
+      uri:
+        url: "https://{{ vmanage_host }}{{ api_endpoint_used }}/definition/{{ item.policyId }}"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: policy_details_no_csrf
+      loop: "{{ vsmart_policies_list.json.data | default([]) }}"
+      when: 
+        - vsmart_policies_list.json.data is defined
+        - vsmart_policies_list.json.data | length > 0
+        - not use_csrf
+        - api_endpoint_used != 'none_successful'
+      ignore_errors: true
+        
+    - name: Set policy details from successful response
+      set_fact:
+        policy_details: "{{ policy_details_with_csrf if use_csrf else policy_details_no_csrf }}"
+      when: api_endpoint_used != 'none_successful'
+        
+    - name: Save individual policy details
+      copy:
+        content: "{{ item.json | to_nice_json }}"
+        dest: "{{ policy_output_dir }}/vsmart_policy_{{ item.item.policyId }}_{{ item.item.policyName | default('unnamed') | regex_replace('[^a-zA-Z0-9_-]', '_') }}.json"
+      loop: "{{ policy_details.results | default([]) }}"
+      when: 
+        - policy_details.results is defined
+        - item.json is defined
+        - item.item.policyId is defined
+        - not item.failed | default(false)
+        
+    - name: Get vSmart policy preview for each policy (with CSRF)
+      uri:
+        url: "https://{{ vmanage_host }}{{ api_endpoint_used }}/preview/{{ item.policyId }}"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          X-XSRF-TOKEN: "{{ csrf_token }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: policy_preview_with_csrf
+      loop: "{{ vsmart_policies_list.json.data | default([]) }}"
+      when: 
+        - vsmart_policies_list.json.data is defined
+        - vsmart_policies_list.json.data | length > 0
+        - use_csrf
+        - api_endpoint_used != 'none_successful'
+      ignore_errors: true
+        
+    - name: Get vSmart policy preview for each policy (without CSRF)
+      uri:
+        url: "https://{{ vmanage_host }}{{ api_endpoint_used }}/preview/{{ item.policyId }}"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: policy_preview_no_csrf
+      loop: "{{ vsmart_policies_list.json.data | default([]) }}"
+      when: 
+        - vsmart_policies_list.json.data is defined
+        - vsmart_policies_list.json.data | length > 0
+        - not use_csrf
+        - api_endpoint_used != 'none_successful'
+      ignore_errors: true
+        
+    - name: Save vSmart policy previews
+      copy:
+        content: "{{ item.json | to_nice_json }}"
+        dest: "{{ policy_output_dir }}/vsmart_policy_preview_{{ item.item.policyId }}_{{ item.item.policyName | default('unnamed') | regex_replace('[^a-zA-Z0-9_-]', '_') }}.json"
+      loop: "{{ (policy_preview_with_csrf.results if use_csrf else policy_preview_no_csrf.results) | default([]) }}"
+      when: 
+        - item.json is defined
+        - item.item.policyId is defined
+        - not item.failed | default(false)
+        
+    - name: Get vSmart policy device assignments (with CSRF)
+      uri:
+        url: "https://{{ vmanage_host }}{{ api_endpoint_used }}/devices/{{ item.policyId }}"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          X-XSRF-TOKEN: "{{ csrf_token }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: policy_devices_with_csrf
+      loop: "{{ vsmart_policies_list.json.data | default([]) }}"
+      when: 
+        - vsmart_policies_list.json.data is defined
+        - vsmart_policies_list.json.data | length > 0
+        - use_csrf
+        - api_endpoint_used != 'none_successful'
+      ignore_errors: true
+        
+    - name: Get vSmart policy device assignments (without CSRF)
+      uri:
+        url: "https://{{ vmanage_host }}{{ api_endpoint_used }}/devices/{{ item.policyId }}"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: policy_devices_no_csrf
+      loop: "{{ vsmart_policies_list.json.data | default([]) }}"
+      when: 
+        - vsmart_policies_list.json.data is defined
+        - vsmart_policies_list.json.data | length > 0
+        - not use_csrf
+        - api_endpoint_used != 'none_successful'
+      ignore_errors: true
+        
+    - name: Save vSmart policy device assignments
+      copy:
+        content: "{{ item.json | to_nice_json }}"
+        dest: "{{ policy_output_dir }}/vsmart_policy_devices_{{ item.item.policyId }}_{{ item.item.policyName | default('unnamed') | regex_replace('[^a-zA-Z0-9_-]', '_') }}.json"
+      loop: "{{ (policy_devices_with_csrf.results if use_csrf else policy_devices_no_csrf.results) | default([]) }}"
+      when: 
+        - item.json is defined
+        - item.item.policyId is defined
+        - not item.failed | default(false)
+        
+    - name: Get overall policy activation status (with CSRF)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/status"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          X-XSRF-TOKEN: "{{ csrf_token }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: policy_activation_with_csrf
+      when: use_csrf
+      ignore_errors: true
+      
+    - name: Get overall policy activation status (without CSRF)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/status"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: policy_activation_no_csrf
+      when: not use_csrf
+      ignore_errors: true
+        
+    - name: Save policy activation status
+      copy:
+        content: "{{ policy_activation.json | to_nice_json }}"
+        dest: "{{ policy_output_dir }}/vsmart_policy_activation_status.json"
+      vars:
+        policy_activation: "{{ policy_activation_with_csrf if use_csrf else policy_activation_no_csrf }}"
+      when: 
+        - policy_activation.json is defined
+        - not policy_activation.failed | default(false)
+        
+    - name: Create execution summary
+      copy:
+        content: |
+          vSmart Policy Retrieval Summary
+          ===============================
+          
+          Execution Time: {{ ansible_date_time.iso8601 }}
+          vManage Host: {{ vmanage_host }}
+          Username: {{ vmanage_username }}
+          Authentication: Session-based with {{ 'CSRF token' if use_csrf else 'no CSRF token' }}
+          
+          API Endpoint Status:
+          - vSmart Policy (with CSRF): {{ vsmart_policies_with_csrf.status | default('N/A') }}
+          - vSmart Policy (without CSRF): {{ vsmart_policies_no_csrf.status | default('N/A') }}
+          - Central Policy (with CSRF): {{ central_policies_with_csrf.status | default('N/A') }}
+          - Central Policy (without CSRF): {{ central_policies_no_csrf.status | default('N/A') }}
+          - Policy Activation Status: {{ policy_activation_with_csrf.status | default(policy_activation_no_csrf.status | default('N/A')) }}
+          
+          Successful API Endpoint: {{ api_endpoint_used }}
+          
+          Results:
+          - Total vSmart Policies Found: {{ vsmart_policies_list.json.data | default([]) | length }}
+          - Policy Details Retrieved: {{ policy_details.results | default([]) | selectattr('json', 'defined') | list | length }}
+          - Policy Previews Retrieved: {{ (policy_preview_with_csrf.results if use_csrf else policy_preview_no_csrf.results) | default([]) | selectattr('json', 'defined') | list | length }}
+          - Policy Device Assignments Retrieved: {{ (policy_devices_with_csrf.results if use_csrf else policy_devices_no_csrf.results) | default([]) | selectattr('json', 'defined') | list | length }}
+          - Activation Status Available: {{ 'Yes' if (policy_activation_with_csrf.json is defined or policy_activation_no_csrf.json is defined) else 'No' }}
+          
+          Output Directory: {{ policy_output_dir }}
+          
+          Files Created:
+          {% if api_endpoint_used != 'none_successful' %}
+          - vsmart_policies_list.json (main policy list)
+          - vsmart_policy_<id>_<n>.json (individual policy details)
+          - vsmart_policy_preview_<id>_<n>.json (policy configuration previews)
+          - vsmart_policy_devices_<id>_<n>.json (policy device assignments)
+          - vsmart_policy_activation_status.json (overall activation status)
+          {% else %}
+          - execution_summary.txt (this file only - all API endpoints failed)
+          
+          TROUBLESHOOTING:
+          All API endpoints returned errors. This could indicate:
+          1. The vManage service is down or overloaded (503 errors)
+          2. Authentication issues (401/403 errors)
+          3. No vSmart policies configured in the environment
+          4. API version incompatibility
+          5. Network connectivity issues
+          
+          Try running again later or check the vManage service status.
+          {% endif %}
+        dest: "{{ policy_output_dir }}/execution_summary.txt"
