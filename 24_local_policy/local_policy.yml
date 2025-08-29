@@ -1,1 +1,353 @@
-
+---
+- name: Get Localized Policy from vManage
+  hosts: localhost
+  gather_facts: true
+  connection: local
+  vars:
+    # vManage connection details from environment variables
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('admin') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    
+    # Output directory configuration
+    generated_dir: "{{ playbook_dir }}/../generated"
+    policy_output_dir: "{{ generated_dir }}/localized_policies"
+    
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+        
+    - name: Create output directory structure
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ generated_dir }}"
+        - "{{ policy_output_dir }}"
+        
+    - name: Authenticate to vManage and get session token
+      uri:
+        url: "https://{{ vmanage_host }}/j_security_check"
+        method: POST
+        body: "j_username={{ vmanage_username }}&j_password={{ vmanage_password }}"
+        headers:
+          Content-Type: "application/x-www-form-urlencoded"
+        validate_certs: false
+        status_code: 200
+      register: auth_response
+      
+    - name: Extract session cookie
+      set_fact:
+        session_cookie: "{{ auth_response.set_cookie }}"
+      
+    - name: Get CSRF token with retry logic
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/client/token"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+        validate_certs: false
+      register: token_response
+      retries: 3
+      delay: 5
+      until: token_response.status == 200
+      ignore_errors: true
+      
+    - name: Set CSRF token or use empty if not available
+      set_fact:
+        csrf_token: "{{ token_response.body | default('') }}"
+        
+    - name: Check if CSRF token is required (test API call)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/vedge"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          X-XSRF-TOKEN: "{{ csrf_token }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: csrf_test
+      ignore_errors: true
+      
+    - name: List all localized policies (with CSRF token)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/vedge"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          X-XSRF-TOKEN: "{{ csrf_token }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: localized_policies_with_csrf
+      when: csrf_test.status == 200
+      ignore_errors: true
+      
+    - name: List all localized policies (without CSRF token)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/vedge"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: localized_policies_no_csrf
+      when: csrf_test.status != 200
+      ignore_errors: true
+      
+    - name: Try alternative vSmart policy endpoint (with CSRF)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/vsmart"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          X-XSRF-TOKEN: "{{ csrf_token }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: vsmart_policies_with_csrf
+      when: 
+        - csrf_test.status == 200
+        - (localized_policies_with_csrf.status | default(0)) != 200
+      ignore_errors: true
+      
+    - name: Try alternative vSmart policy endpoint (without CSRF)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/vsmart"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: vsmart_policies_no_csrf
+      when: 
+        - csrf_test.status != 200
+        - (localized_policies_no_csrf.status | default(0)) != 200
+      ignore_errors: true
+        
+    - name: Set policies list from successful response
+      set_fact:
+        localized_policies_list: "{{ 
+          localized_policies_with_csrf if (localized_policies_with_csrf.status | default(0)) == 200 else
+          localized_policies_no_csrf if (localized_policies_no_csrf.status | default(0)) == 200 else
+          vsmart_policies_with_csrf if (vsmart_policies_with_csrf.status | default(0)) == 200 else
+          vsmart_policies_no_csrf if (vsmart_policies_no_csrf.status | default(0)) == 200 else
+          {'json': {'data': []}}
+        }}"
+        use_csrf: "{{ csrf_test.status == 200 }}"
+        api_endpoint_used: "{{ 
+          '/dataservice/template/policy/vedge' if (localized_policies_with_csrf.status | default(0)) == 200 or (localized_policies_no_csrf.status | default(0)) == 200 else
+          '/dataservice/template/policy/vsmart' if (vsmart_policies_with_csrf.status | default(0)) == 200 or (vsmart_policies_no_csrf.status | default(0)) == 200 else
+          'none_successful'
+        }}"
+        
+    - name: Display API status information
+      debug:
+        msg: |
+          API Status Summary:
+          - vEdge Policy Endpoint (with CSRF): {{ localized_policies_with_csrf.status | default('N/A') }}
+          - vEdge Policy Endpoint (without CSRF): {{ localized_policies_no_csrf.status | default('N/A') }}
+          - vSmart Policy Endpoint (with CSRF): {{ vsmart_policies_with_csrf.status | default('N/A') }}
+          - vSmart Policy Endpoint (without CSRF): {{ vsmart_policies_no_csrf.status | default('N/A') }}
+          - Using CSRF Token: {{ use_csrf }}
+          - Successful API Endpoint: {{ api_endpoint_used }}
+          - Policies Found: {{ localized_policies_list.json.data | default([]) | length }}
+        
+    - name: Save localized policies list
+      copy:
+        content: "{{ localized_policies_list.json | to_nice_json }}"
+        dest: "{{ policy_output_dir }}/localized_policies_list.json"
+      when: 
+        - localized_policies_list.json is defined
+        - api_endpoint_used != 'none_successful'
+        
+    - name: Get details for each localized policy (with CSRF)
+      uri:
+        url: "https://{{ vmanage_host }}{{ api_endpoint_used }}/definition/{{ item.policyId }}"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          X-XSRF-TOKEN: "{{ csrf_token }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: policy_details_with_csrf
+      loop: "{{ localized_policies_list.json.data | default([]) }}"
+      when: 
+        - localized_policies_list.json.data is defined
+        - localized_policies_list.json.data | length > 0
+        - use_csrf
+        - api_endpoint_used != 'none_successful'
+      ignore_errors: true
+        
+    - name: Get details for each localized policy (without CSRF)
+      uri:
+        url: "https://{{ vmanage_host }}{{ api_endpoint_used }}/definition/{{ item.policyId }}"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: policy_details_no_csrf
+      loop: "{{ localized_policies_list.json.data | default([]) }}"
+      when: 
+        - localized_policies_list.json.data is defined
+        - localized_policies_list.json.data | length > 0
+        - not use_csrf
+        - api_endpoint_used != 'none_successful'
+      ignore_errors: true
+        
+    - name: Set policy details from successful response
+      set_fact:
+        policy_details: "{{ policy_details_with_csrf if use_csrf else policy_details_no_csrf }}"
+      when: api_endpoint_used != 'none_successful'
+        
+    - name: Save individual policy details
+      copy:
+        content: "{{ item.json | to_nice_json }}"
+        dest: "{{ policy_output_dir }}/policy_{{ item.item.policyId }}_{{ item.item.policyName | default('unnamed') | regex_replace('[^a-zA-Z0-9_-]', '_') }}.json"
+      loop: "{{ policy_details.results | default([]) }}"
+      when: 
+        - policy_details.results is defined
+        - item.json is defined
+        - item.item.policyId is defined
+        - not item.failed | default(false)
+        
+    - name: Get localized policy attachment information (with CSRF)
+      uri:
+        url: "https://{{ vmanage_host }}{{ api_endpoint_used }}/devices"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          X-XSRF-TOKEN: "{{ csrf_token }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: policy_attachments_with_csrf
+      when: 
+        - use_csrf
+        - api_endpoint_used != 'none_successful'
+      ignore_errors: true
+      
+    - name: Get localized policy attachment information (without CSRF)
+      uri:
+        url: "https://{{ vmanage_host }}{{ api_endpoint_used }}/devices"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: policy_attachments_no_csrf
+      when: 
+        - not use_csrf
+        - api_endpoint_used != 'none_successful'
+      ignore_errors: true
+        
+    - name: Save policy attachment information
+      copy:
+        content: "{{ policy_attachments.json | to_nice_json }}"
+        dest: "{{ policy_output_dir }}/policy_device_attachments.json"
+      vars:
+        policy_attachments: "{{ policy_attachments_with_csrf if use_csrf else policy_attachments_no_csrf }}"
+      when: 
+        - policy_attachments.json is defined
+        - not policy_attachments.failed | default(false)
+        
+    - name: Get policy status information (with CSRF)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/status"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          X-XSRF-TOKEN: "{{ csrf_token }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: policy_status_with_csrf
+      when: use_csrf
+      ignore_errors: true
+      
+    - name: Get policy status information (without CSRF)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/status"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: policy_status_no_csrf
+      when: not use_csrf
+      ignore_errors: true
+        
+    - name: Save policy status information
+      copy:
+        content: "{{ policy_status.json | to_nice_json }}"
+        dest: "{{ policy_output_dir }}/policy_status.json"
+      vars:
+        policy_status: "{{ policy_status_with_csrf if use_csrf else policy_status_no_csrf }}"
+      when: 
+        - policy_status.json is defined
+        - not policy_status.failed | default(false)
+        
+    - name: Create execution summary
+      copy:
+        content: |
+          Localized Policy Retrieval Summary
+          ==================================
+          
+          Execution Time: {{ ansible_date_time.iso8601 }}
+          vManage Host: {{ vmanage_host }}
+          Username: {{ vmanage_username }}
+          Authentication: Session-based with {{ 'CSRF token' if use_csrf else 'no CSRF token' }}
+          
+          API Endpoint Status:
+          - vEdge Policy (with CSRF): {{ localized_policies_with_csrf.status | default('N/A') }}
+          - vEdge Policy (without CSRF): {{ localized_policies_no_csrf.status | default('N/A') }}
+          - vSmart Policy (with CSRF): {{ vsmart_policies_with_csrf.status | default('N/A') }}
+          - vSmart Policy (without CSRF): {{ vsmart_policies_no_csrf.status | default('N/A') }}
+          - Policy Status: {{ policy_status_with_csrf.status | default(policy_status_no_csrf.status | default('N/A')) }}
+          - Policy Attachments: {{ policy_attachments_with_csrf.status | default(policy_attachments_no_csrf.status | default('N/A')) }}
+          
+          Successful API Endpoint: {{ api_endpoint_used }}
+          
+          Results:
+          - Total Localized Policies Found: {{ localized_policies_list.json.data | default([]) | length }}
+          - Policy Details Retrieved: {{ policy_details.results | default([]) | selectattr('json', 'defined') | list | length }}
+          - Policy Attachments Available: {{ 'Yes' if (policy_attachments_with_csrf.json is defined or policy_attachments_no_csrf.json is defined) else 'No' }}
+          - Policy Status Available: {{ 'Yes' if (policy_status_with_csrf.json is defined or policy_status_no_csrf.json is defined) else 'No' }}
+          
+          Output Directory: {{ policy_output_dir }}
+          
+          Files Created:
+          {% if api_endpoint_used != 'none_successful' %}
+          - localized_policies_list.json (main policy list)
+          - policy_<id>_<name>.json (individual policy details)
+          - policy_device_attachments.json (device attachments)
+          - policy_status.json (policy status information)
+          {% else %}
+          - execution_summary.txt (this file only - all API endpoints failed)
+          
+          TROUBLESHOOTING:
+          All API endpoints returned errors. This could indicate:
+          1. The vManage service is down or overloaded (503 errors)
+          2. Authentication issues (401/403 errors)
+          3. API version incompatibility
+          4. Network connectivity issues
+          
+          Try running again later or check the vManage service status.
+          {% endif %}
+        dest: "{{ policy_output_dir }}/execution_summary.txt"
