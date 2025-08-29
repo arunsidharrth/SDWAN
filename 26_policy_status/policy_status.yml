@@ -1,1 +1,390 @@
-
+---
+- name: Get policy status - Retrieve policy status
+  hosts: localhost
+  gather_facts: true
+  connection: local
+  vars:
+    # vManage connection details from environment variables
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('admin') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    
+    # Output directory configuration
+    generated_dir: "{{ playbook_dir }}/../generated"
+    policy_output_dir: "{{ generated_dir }}/policy_status"
+    
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+        
+    - name: Create output directory structure
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ generated_dir }}"
+        - "{{ policy_output_dir }}"
+        
+    - name: Authenticate to vManage and get session token
+      uri:
+        url: "https://{{ vmanage_host }}/j_security_check"
+        method: POST
+        body: "j_username={{ vmanage_username }}&j_password={{ vmanage_password }}"
+        headers:
+          Content-Type: "application/x-www-form-urlencoded"
+        validate_certs: false
+        status_code: 200
+      register: auth_response
+      
+    - name: Extract session cookie
+      set_fact:
+        session_cookie: "{{ auth_response.set_cookie }}"
+      
+    - name: Get CSRF token with retry logic
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/client/token"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+        validate_certs: false
+      register: token_response
+      retries: 3
+      delay: 5
+      until: token_response.status == 200
+      ignore_errors: true
+      
+    - name: Set CSRF token or use empty if not available
+      set_fact:
+        csrf_token: "{{ token_response.body | default('') }}"
+        
+    - name: Check if CSRF token is required (test API call)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/status"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          X-XSRF-TOKEN: "{{ csrf_token }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: csrf_test
+      ignore_errors: true
+      
+    - name: Get policy status (with CSRF token)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/status"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          X-XSRF-TOKEN: "{{ csrf_token }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: policy_status_with_csrf
+      when: csrf_test.status == 200
+      ignore_errors: true
+      
+    - name: Get policy status (without CSRF token)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/status"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: policy_status_no_csrf
+      when: csrf_test.status != 200
+      ignore_errors: true
+      
+    - name: Try alternative policy status endpoint (with CSRF)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/status/summary"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          X-XSRF-TOKEN: "{{ csrf_token }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: policy_summary_with_csrf
+      when: 
+        - csrf_test.status == 200
+        - (policy_status_with_csrf.status | default(0)) != 200
+      ignore_errors: true
+      
+    - name: Try alternative policy status endpoint (without CSRF)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/status/summary"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: policy_summary_no_csrf
+      when: 
+        - csrf_test.status != 200
+        - (policy_status_no_csrf.status | default(0)) != 200
+      ignore_errors: true
+        
+    - name: Get device policy status (with CSRF)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/policy/status"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          X-XSRF-TOKEN: "{{ csrf_token }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: device_policy_status_with_csrf
+      when: csrf_test.status == 200
+      ignore_errors: true
+      
+    - name: Get device policy status (without CSRF)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/policy/status"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: device_policy_status_no_csrf
+      when: csrf_test.status != 200
+      ignore_errors: true
+        
+    - name: Set policy status from successful responses
+      set_fact:
+        policy_status: "{{ 
+          policy_status_with_csrf if (policy_status_with_csrf.status | default(0)) == 200 else
+          policy_status_no_csrf if (policy_status_no_csrf.status | default(0)) == 200 else
+          {'json': {'data': []}, 'status': 0}
+        }}"
+        policy_summary: "{{ 
+          policy_summary_with_csrf if (policy_summary_with_csrf.status | default(0)) == 200 else
+          policy_summary_no_csrf if (policy_summary_no_csrf.status | default(0)) == 200 else
+          {'json': {'data': []}, 'status': 0}
+        }}"
+        device_policy_status: "{{ 
+          device_policy_status_with_csrf if (device_policy_status_with_csrf.status | default(0)) == 200 else
+          device_policy_status_no_csrf if (device_policy_status_no_csrf.status | default(0)) == 200 else
+          {'json': {'data': []}, 'status': 0}
+        }}"
+        use_csrf: "{{ csrf_test.status == 200 }}"
+        
+    - name: Display API status information
+      debug:
+        msg: |
+          API Status Summary:
+          - Policy Status Endpoint (with CSRF): {{ policy_status_with_csrf.status | default('N/A') }}
+          - Policy Status Endpoint (without CSRF): {{ policy_status_no_csrf.status | default('N/A') }}
+          - Policy Summary Endpoint (with CSRF): {{ policy_summary_with_csrf.status | default('N/A') }}
+          - Policy Summary Endpoint (without CSRF): {{ policy_summary_no_csrf.status | default('N/A') }}
+          - Device Policy Status (with CSRF): {{ device_policy_status_with_csrf.status | default('N/A') }}
+          - Device Policy Status (without CSRF): {{ device_policy_status_no_csrf.status | default('N/A') }}
+          - Using CSRF Token: {{ use_csrf }}
+          - Policy Status Records: {{ policy_status.json.data | default([]) | length }}
+          - Policy Summary Records: {{ policy_summary.json.data | default([]) | length }}
+          - Device Policy Records: {{ device_policy_status.json.data | default([]) | length }}
+        
+    - name: Save main policy status information
+      copy:
+        content: "{{ policy_status.json | to_nice_json }}"
+        dest: "{{ policy_output_dir }}/policy_status.json"
+      when: 
+        - policy_status.json is defined
+        - policy_status.status == 200
+        
+    - name: Save policy status summary
+      copy:
+        content: "{{ policy_summary.json | to_nice_json }}"
+        dest: "{{ policy_output_dir }}/policy_status_summary.json"
+      when: 
+        - policy_summary.json is defined
+        - policy_summary.status == 200
+        
+    - name: Save device policy status
+      copy:
+        content: "{{ device_policy_status.json | to_nice_json }}"
+        dest: "{{ policy_output_dir }}/device_policy_status.json"
+      when: 
+        - device_policy_status.json is defined
+        - device_policy_status.status == 200
+        
+    - name: Get policy activation history (with CSRF)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/history"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          X-XSRF-TOKEN: "{{ csrf_token }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: policy_history_with_csrf
+      when: use_csrf
+      ignore_errors: true
+      
+    - name: Get policy activation history (without CSRF)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/history"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: policy_history_no_csrf
+      when: not use_csrf
+      ignore_errors: true
+        
+    - name: Save policy activation history
+      copy:
+        content: "{{ policy_history.json | to_nice_json }}"
+        dest: "{{ policy_output_dir }}/policy_activation_history.json"
+      vars:
+        policy_history: "{{ policy_history_with_csrf if use_csrf else policy_history_no_csrf }}"
+      when: 
+        - policy_history.json is defined
+        - not policy_history.failed | default(false)
+        
+    - name: Get policy deployment status per device (with CSRF)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/policy/deployment"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          X-XSRF-TOKEN: "{{ csrf_token }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: policy_deployment_with_csrf
+      when: use_csrf
+      ignore_errors: true
+      
+    - name: Get policy deployment status per device (without CSRF)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/policy/deployment"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: policy_deployment_no_csrf
+      when: not use_csrf
+      ignore_errors: true
+        
+    - name: Save policy deployment status
+      copy:
+        content: "{{ policy_deployment.json | to_nice_json }}"
+        dest: "{{ policy_output_dir }}/policy_deployment_status.json"
+      vars:
+        policy_deployment: "{{ policy_deployment_with_csrf if use_csrf else policy_deployment_no_csrf }}"
+      when: 
+        - policy_deployment.json is defined
+        - not policy_deployment.failed | default(false)
+        
+    - name: Get policy errors and warnings (with CSRF)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/errors"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          X-XSRF-TOKEN: "{{ csrf_token }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: policy_errors_with_csrf
+      when: use_csrf
+      ignore_errors: true
+      
+    - name: Get policy errors and warnings (without CSRF)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/policy/errors"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookie }}"
+          Content-Type: "application/json"
+        validate_certs: false
+        timeout: 60
+      register: policy_errors_no_csrf
+      when: not use_csrf
+      ignore_errors: true
+        
+    - name: Save policy errors and warnings
+      copy:
+        content: "{{ policy_errors.json | to_nice_json }}"
+        dest: "{{ policy_output_dir }}/policy_errors_warnings.json"
+      vars:
+        policy_errors: "{{ policy_errors_with_csrf if use_csrf else policy_errors_no_csrf }}"
+      when: 
+        - policy_errors.json is defined
+        - not policy_errors.failed | default(false)
+        
+    - name: Create execution summary
+      copy:
+        content: |
+          Policy Status Retrieval Summary
+          ===============================
+          
+          Execution Time: {{ ansible_date_time.iso8601 }}
+          vManage Host: {{ vmanage_host }}
+          Username: {{ vmanage_username }}
+          Authentication: Session-based with {{ 'CSRF token' if use_csrf else 'no CSRF token' }}
+          
+          API Endpoint Status:
+          - Policy Status: {{ policy_status_with_csrf.status | default(policy_status_no_csrf.status | default('N/A')) }}
+          - Policy Status Summary: {{ policy_summary_with_csrf.status | default(policy_summary_no_csrf.status | default('N/A')) }}
+          - Device Policy Status: {{ device_policy_status_with_csrf.status | default(device_policy_status_no_csrf.status | default('N/A')) }}
+          - Policy History: {{ policy_history_with_csrf.status | default(policy_history_no_csrf.status | default('N/A')) }}
+          - Policy Deployment: {{ policy_deployment_with_csrf.status | default(policy_deployment_no_csrf.status | default('N/A')) }}
+          - Policy Errors: {{ policy_errors_with_csrf.status | default(policy_errors_no_csrf.status | default('N/A')) }}
+          
+          Results:
+          - Policy Status Records: {{ policy_status.json.data | default([]) | length }}
+          - Policy Summary Records: {{ policy_summary.json.data | default([]) | length }}
+          - Device Policy Status Records: {{ device_policy_status.json.data | default([]) | length }}
+          - History Records Available: {{ 'Yes' if (policy_history_with_csrf.json is defined or policy_history_no_csrf.json is defined) else 'No' }}
+          - Deployment Status Available: {{ 'Yes' if (policy_deployment_with_csrf.json is defined or policy_deployment_no_csrf.json is defined) else 'No' }}
+          - Error Information Available: {{ 'Yes' if (policy_errors_with_csrf.json is defined or policy_errors_no_csrf.json is defined) else 'No' }}
+          
+          Output Directory: {{ policy_output_dir }}
+          
+          Files Created:
+          {% if policy_status.status == 200 or policy_summary.status == 200 or device_policy_status.status == 200 %}
+          - policy_status.json (main policy status information)
+          - policy_status_summary.json (policy status summary)
+          - device_policy_status.json (per-device policy status)
+          - policy_activation_history.json (policy activation history)
+          - policy_deployment_status.json (deployment status per device)
+          - policy_errors_warnings.json (policy errors and warnings)
+          {% else %}
+          - execution_summary.txt (this file only - all API endpoints failed)
+          
+          TROUBLESHOOTING:
+          All policy status API endpoints returned errors. This could indicate:
+          1. The vManage service is down or overloaded (503 errors)
+          2. Authentication issues (401/403 errors)
+          3. Insufficient permissions for policy status access (403 errors)
+          4. API version incompatibility
+          5. No policies configured in the environment
+          
+          Common Issues in Sandbox Environments:
+          - Policy status APIs may be restricted in shared demo environments
+          - Some endpoints require administrative privileges
+          - Service availability can be limited during peak usage
+          
+          Try running again later or check the vManage service status.
+          {% endif %}
+        dest: "{{ policy_output_dir }}/execution_summary.txt"
