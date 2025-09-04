@@ -1,1 +1,286 @@
+---
+- name: "Use Case 27: List Configuration Groups - Get all configuration groups"
+  hosts: localhost
+  gather_facts: no
+  vars:
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('sandbox-sdwan-2.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('devnetuser') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('RG!_Yw919_83') }}"
+    vmanage_port: "443"
+    generated_dir: "{{ playbook_dir }}/../generated"
+    config_groups_subdir: "{{ generated_dir }}/config_groups"
 
+  tasks:
+    - name: Validate environment variables
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+
+    - name: Create generated directory
+      file:
+        path: "{{ generated_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Create config_groups subdirectory
+      file:
+        path: "{{ config_groups_subdir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Login to vManage and get session
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/j_security_check"
+        method: POST
+        validate_certs: no
+        timeout: 60
+        body_format: form-urlencoded
+        body:
+          j_username: "{{ vmanage_username }}"
+          j_password: "{{ vmanage_password }}"
+      register: login_response
+      ignore_errors: yes
+
+    - name: Get CSRF token
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/client/token"
+        method: GET
+        validate_certs: no
+        timeout: 60
+        headers:
+          Cookie: "{{ login_response.cookies_string | default('') }}"
+      register: token_response
+      ignore_errors: yes
+      when: login_response.status is defined
+
+    - name: Validate authentication
+      fail:
+        msg: |
+          Authentication failed to vManage at {{ vmanage_host }}:{{ vmanage_port }}
+          Login Status: {{ login_response.status | default('Unknown') }}
+          Token Status: {{ token_response.status | default('Not attempted') }}
+          
+          Please check:
+          1. vManage server is running and accessible
+          2. Network connectivity to {{ vmanage_host }}
+          3. Username and password are correct
+          4. User has appropriate permissions
+      when: (login_response.status is undefined or login_response.status not in [200, 302]) or (token_response.status is undefined or token_response.status != 200)
+
+    - name: Get all configuration groups
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/template/config-group"
+        method: GET
+        validate_certs: no
+        timeout: 60
+        headers:
+          Cookie: "{{ login_response.cookies_string | default('') }}"
+          X-XSRF-TOKEN: "{{ token_response.json | default('') }}"
+      register: config_groups_response
+      ignore_errors: yes
+
+    - name: Check if configuration groups access is denied
+      debug:
+        msg: |
+          Access to configuration groups endpoint denied (HTTP {{ config_groups_response.status }}).
+          This may be due to insufficient user permissions in the sandbox environment.
+          Attempting alternative approach...
+      when: config_groups_response.status == 403
+
+    - name: Try alternative endpoint - device templates
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/template/device"
+        method: GET
+        validate_certs: no
+        timeout: 60
+        headers:
+          Cookie: "{{ login_response.cookies_string | default('') }}"
+          X-XSRF-TOKEN: "{{ token_response.json | default('') }}"
+      register: device_templates_response
+      ignore_errors: yes
+      when: config_groups_response.status == 403
+
+    - name: Try another alternative - feature templates
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/template/feature"
+        method: GET
+        validate_certs: no
+        timeout: 60
+        headers:
+          Cookie: "{{ login_response.cookies_string | default('') }}"
+          X-XSRF-TOKEN: "{{ token_response.json | default('') }}"
+      register: feature_templates_response
+      ignore_errors: yes
+      when: config_groups_response.status == 403 and (device_templates_response is not defined or device_templates_response.status != 200)
+
+    - name: Determine which data to use
+      set_fact:
+        final_response: >-
+          {{
+            config_groups_response if config_groups_response.status == 200
+            else (device_templates_response if (device_templates_response is defined and device_templates_response.status == 200)
+            else (feature_templates_response if (feature_templates_response is defined and feature_templates_response.status == 200)
+            else config_groups_response))
+          }}
+        data_type: >-
+          {{
+            'config_groups' if config_groups_response.status == 200
+            else ('device_templates' if (device_templates_response is defined and device_templates_response.status == 200)
+            else ('feature_templates' if (feature_templates_response is defined and feature_templates_response.status == 200)
+            else 'failed'))
+          }}
+
+    - name: Save configuration data to JSON file
+      copy:
+        content: "{{ final_response.json | to_nice_json }}"
+        dest: "{{ config_groups_subdir }}/{{ data_type }}_data.json"
+      when: final_response.status == 200
+
+    - name: Save configuration data to text file
+      copy:
+        content: |
+          {% if data_type == 'config_groups' %}
+          Configuration Groups Report
+          ===========================
+          Generated from: {{ vmanage_host }}
+          Authentication: CSRF Token
+          Total Configuration Groups: {{ final_response.json.data | length }}
+          
+          {% for group in final_response.json.data %}
+          Configuration Group {{ loop.index }}:
+          - Name: {{ group.groupName | default('N/A') }}
+          - Description: {{ group.description | default('N/A') }}
+          - Device Type: {{ group.deviceType | default('N/A') }}
+          - Solution: {{ group.solution | default('N/A') }}
+          - Created On: {{ group.createdOn | default('N/A') }}
+          - Created By: {{ group.createdBy | default('N/A') }}
+          - Last Updated On: {{ group.lastUpdatedOn | default('N/A') }}
+          - Last Updated By: {{ group.lastUpdatedBy | default('N/A') }}
+          - Group ID: {{ group.groupId | default('N/A') }}
+          - Factory Default: {{ group.factoryDefault | default('N/A') }}
+          - Profile Type: {{ group.profileType | default('N/A') }}
+          {% if group.associatedTemplates is defined and group.associatedTemplates | length > 0 %}
+          - Associated Templates: 
+          {% for template in group.associatedTemplates %}
+            * {{ template.templateName | default('N/A') }} (Type: {{ template.templateType | default('N/A') }})
+          {% endfor %}
+          {% else %}
+          - Associated Templates: None
+          {% endif %}
+          
+          {% endfor %}
+          {% elif data_type == 'device_templates' %}
+          Device Templates Report (Alternative Data)
+          ==========================================
+          Generated from: {{ vmanage_host }}
+          Authentication: CSRF Token
+          Note: Configuration Groups endpoint access denied. Showing Device Templates instead.
+          Total Device Templates: {{ final_response.json.data | length }}
+          
+          {% for template in final_response.json.data %}
+          Device Template {{ loop.index }}:
+          - Name: {{ template.templateName | default('N/A') }}
+          - Description: {{ template.templateDescription | default('N/A') }}
+          - Device Type: {{ template.deviceType | default('N/A') }}
+          - Template ID: {{ template.templateId | default('N/A') }}
+          - Created On: {{ template.createdOn | default('N/A') }}
+          - Created By: {{ template.createdBy | default('N/A') }}
+          - Last Updated On: {{ template.lastUpdatedOn | default('N/A') }}
+          - Last Updated By: {{ template.lastUpdatedBy | default('N/A') }}
+          - Factory Default: {{ template.factoryDefault | default('N/A') }}
+          - Template Type: {{ template.templateType | default('N/A') }}
+          
+          {% endfor %}
+          {% elif data_type == 'feature_templates' %}
+          Feature Templates Report (Alternative Data)
+          ===========================================
+          Generated from: {{ vmanage_host }}
+          Authentication: CSRF Token
+          Note: Configuration Groups and Device Templates access denied. Showing Feature Templates instead.
+          Total Feature Templates: {{ final_response.json.data | length }}
+          
+          {% for template in final_response.json.data %}
+          Feature Template {{ loop.index }}:
+          - Name: {{ template.templateName | default('N/A') }}
+          - Description: {{ template.templateDescription | default('N/A') }}
+          - Device Type: {{ template.deviceType | default('N/A') }}
+          - Template Type: {{ template.templateType | default('N/A') }}
+          - Template ID: {{ template.templateId | default('N/A') }}
+          - Created On: {{ template.createdOn | default('N/A') }}
+          - Created By: {{ template.createdBy | default('N/A') }}
+          - Last Updated On: {{ template.lastUpdatedOn | default('N/A') }}
+          - Last Updated By: {{ template.lastUpdatedBy | default('N/A') }}
+          - Factory Default: {{ template.factoryDefault | default('N/A') }}
+          
+          {% endfor %}
+          {% else %}
+          SD-WAN Template Report - Access Denied
+          =====================================
+          Generated from: {{ vmanage_host }}
+          Authentication: CSRF Token
+          Status: All template endpoints returned access denied errors
+          
+          This indicates insufficient user permissions for template access.
+          {% endif %}
+        dest: "{{ config_groups_subdir }}/{{ data_type }}_data.txt"
+      when: final_response.status == 200 or data_type == 'failed'
+
+    - name: Handle API access errors
+      debug:
+        msg: |
+          ERROR: Unable to access SD-WAN template data.
+          
+          Configuration Groups Status: {{ config_groups_response.status | default('Not attempted') }}
+          {% if config_groups_response.status is defined %}
+          Config Groups Error: {{ config_groups_response.msg | default('Unknown error') }}
+          {% endif %}
+          
+          {% if device_templates_response is defined %}
+          Device Templates Status: {{ device_templates_response.status | default('Not attempted') }}
+          {% if device_templates_response.status is defined %}
+          Device Templates Error: {{ device_templates_response.msg | default('Unknown error') }}
+          {% endif %}
+          {% endif %}
+          
+          {% if feature_templates_response is defined %}
+          Feature Templates Status: {{ feature_templates_response.status | default('Not attempted') }}
+          {% if feature_templates_response.status is defined %}
+          Feature Templates Error: {{ feature_templates_response.msg | default('Unknown error') }}
+          {% endif %}
+          {% endif %}
+          
+          Authentication Method: CSRF Token
+          Login Status: {{ login_response.status | default('Failed') }}
+          Token Status: {{ token_response.status | default('Failed') }}
+          
+          This may be due to:
+          1. Insufficient user permissions in the sandbox
+          2. API endpoints not available in this vManage version
+          3. User role restrictions
+          4. CSRF token authentication issues
+          
+          Please check with your vManage administrator for proper access rights.
+      when: data_type == 'failed'
+
+    - name: Display completion message
+      debug:
+        msg: |
+          {% if final_response.status == 200 %}
+          {{ data_type | title | replace('_', ' ') }} report generated successfully!
+          Authentication: {{ 'CSRF Token' if (token_response.status is defined and token_response.status == 200) else 'Session Cookie Only' }}
+          Files saved to:
+          - JSON format: {{ config_groups_subdir }}/{{ data_type }}_data.json
+          - Text format: {{ config_groups_subdir }}/{{ data_type }}_data.txt
+          {% if data_type != 'config_groups' %}
+          
+          Note: Configuration Groups endpoint was not accessible, so {{ data_type | replace('_', ' ') | title }} data was retrieved instead.
+          {% endif %}
+          {% else %}
+          Report generation failed due to API access restrictions.
+          Authentication used: {{ 'CSRF Token' if (token_response.status is defined and token_response.status == 200) else 'Session Cookie Only' }}
+          {% endif %}
+      when: final_response is defined
