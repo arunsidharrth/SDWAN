@@ -1,1 +1,148 @@
+---
+# Use Case 32: Get events - Retrieve system events
+# vManage version 20.15
+# Saves execution results in "generated" folder
 
+- name: Get Events - Retrieve system events from vManage
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    # Environment variables with proper defaults
+    vmanage_host: "sandbox-sdwan-2.cisco.com"
+    vmanage_username: "devnetuser"
+    vmanage_password: "RG!_Yw919_83"
+    vmanage_port: "443"
+    
+    # Generated directory with two dots as requested
+    generated_dir: "{{ playbook_dir }}/../generated"
+    
+    # Request timeout
+    request_timeout: 30
+
+  tasks:
+    - name: Create generated directory
+      file:
+        path: "{{ generated_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Debug variables
+      debug:
+        msg:
+          - "vManage Host: {{ vmanage_host }}"
+          - "vManage Port: {{ vmanage_port }}"
+          - "Full URL will be: https://{{ vmanage_host }}:{{ vmanage_port }}"
+
+    - name: Set full URL
+      set_fact:
+        vmanage_url: "https://{{ vmanage_host }}:{{ vmanage_port }}"
+
+    - name: Debug final URL
+      debug:
+        msg: "Final URL: {{ vmanage_url }}"
+
+    - name: Test vManage connectivity
+      uri:
+        url: "{{ vmanage_url }}"
+        method: GET
+        validate_certs: no
+        timeout: "{{ request_timeout }}"
+        status_code: [200, 302, 401, 403]
+      register: connectivity_test
+
+    - name: Authenticate and get session token
+      uri:
+        url: "{{ vmanage_url }}/j_security_check"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          j_username: "{{ vmanage_username }}"
+          j_password: "{{ vmanage_password }}"
+        validate_certs: no
+        timeout: "{{ request_timeout }}"
+        status_code: [200, 302]
+      register: login_response
+
+    - name: Extract session cookies
+      set_fact:
+        session_cookies: "{{ login_response.cookies_string }}"
+
+    - name: Debug session cookies
+      debug:
+        msg: "Session cookies: {{ session_cookies[:100] }}..."
+
+    - name: Get CSRF token
+      uri:
+        url: "{{ vmanage_url }}/dataservice/client/token"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookies }}"
+        validate_certs: no
+        timeout: "{{ request_timeout }}"
+        status_code: [200]
+        return_content: yes
+      register: csrf_response
+
+    - name: Debug CSRF response
+      debug:
+        msg: 
+          - "CSRF Response status: {{ csrf_response.status }}"
+          - "CSRF Response content: {{ csrf_response.content | default('NO_CONTENT') }}"
+          - "CSRF Response JSON: {{ csrf_response.json | default('NO_JSON') }}"
+
+    - name: Set CSRF token from content or json
+      set_fact:
+        csrf_token: "{{ csrf_response.content | default(csrf_response.json | default('')) }}"
+
+    - name: Debug CSRF token
+      debug:
+        msg: "CSRF Token: {{ csrf_token }}"
+
+    - name: Get system events
+      uri:
+        url: "{{ vmanage_url }}/dataservice/event"
+        method: GET
+        headers:
+          Cookie: "{{ session_cookies }}"
+          X-XSRF-TOKEN: "{{ csrf_token }}"
+          Content-Type: "application/json"
+          Accept: "application/json"
+        validate_certs: no
+        timeout: "{{ request_timeout }}"
+        status_code: [200]
+        return_content: yes
+      register: events_response
+
+    - name: Save events to JSON file
+      copy:
+        content: "{{ events_response.json | to_nice_json }}"
+        dest: "{{ generated_dir }}/events.json"
+        mode: '0644'
+      when: events_response.json is defined
+
+    - name: Create events summary
+      copy:
+        content: |
+          Events Summary
+          ==============
+          Total events retrieved: {{ events_response.json.data | length if events_response.json.data is defined else 0 }}
+          Source: {{ vmanage_url }}
+          
+          {% if events_response.json.data is defined %}
+          Event Details:
+          {% for event in events_response.json.data[:10] %}
+          - Event ID: {{ event.eventId | default('N/A') }}
+            Type: {{ event.eventname | default('N/A') }}
+            Device: {{ event['system-ip'] | default('N/A') }}
+            Severity: {{ event.severity | default('N/A') }}
+            Time: {{ event.entry_time | default('N/A') }}
+          
+          {% endfor %}
+          {% if events_response.json.data | length > 10 %}
+          ... and {{ events_response.json.data | length - 10 }} more events
+          {% endif %}
+          {% endif %}
+        dest: "{{ generated_dir }}/events_summary.txt"
+        mode: '0644'
+      when: events_response.json is defined
