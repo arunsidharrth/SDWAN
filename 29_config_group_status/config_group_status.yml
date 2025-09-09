@@ -1,1 +1,115 @@
+---
+- name: Get Configuration Group Status
+  hosts: localhost
+  gather_facts: yes
+  vars:
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    generated_dir: "{{ playbook_dir }}/../generated"
 
+  tasks:
+    - name: Validate required environment variables
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+
+    - name: Create generated directory
+      file:
+        path: "{{ generated_dir }}/config_groups"
+        state: directory
+        mode: '0755'
+
+    - name: Test vManage connectivity
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: connectivity_test
+      ignore_errors: yes
+
+    - name: Validate connectivity
+      fail:
+        msg: "Unable to connect to vManage at {{ vmanage_host }}:{{ vmanage_port }}. Status: {{ connectivity_test.status }}"
+      when: connectivity_test.status != 200
+
+    - name: Try primary configuration group endpoint
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/v1/config-group"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: config_group_result
+      ignore_errors: yes
+
+    - name: Try alternative configuration group endpoint if primary fails
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/configgroup"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: config_group_alt_result
+      ignore_errors: yes
+      when: config_group_result.status != 200
+
+    - name: Try device template groups endpoint if others fail
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/template/device"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: device_template_result
+      ignore_errors: yes
+      when: config_group_result.status != 200 and (config_group_alt_result is not defined or config_group_alt_result.status != 200)
+
+    - name: Set final result based on successful endpoint
+      set_fact:
+        final_result: "{{ config_group_result if config_group_result.status == 200 else (config_group_alt_result if config_group_alt_result is defined and config_group_alt_result.status == 200 else device_template_result) }}"
+
+    - name: Save configuration group status to file
+      copy:
+        content: "{{ final_result.json | to_nice_json }}"
+        dest: "{{ generated_dir }}/config_groups/config_group_status.json"
+      when: final_result is defined and final_result.json is defined
+
+    - name: Save endpoint information
+      copy:
+        content: |
+          Configuration Group Status Retrieved From:
+          Endpoint: {{ final_result.url if final_result is defined else 'No successful endpoint' }}
+          Status Code: {{ final_result.status if final_result is defined else 'N/A' }}
+          Timestamp: {{ ansible_date_time.iso8601 }}
+          
+          Available Endpoints Tested:
+          1. /dataservice/v1/config-group
+          2. /dataservice/configgroup  
+          3. /dataservice/template/device
+        dest: "{{ generated_dir }}/config_groups/endpoint_info.txt"
+
+    - name: Show completion message
+      debug:
+        msg: "Configuration group status saved to {{ generated_dir }}/config_groups/config_group_status.json from endpoint: {{ final_result.url if final_result is defined and final_result.json is defined else 'No data retrieved - check endpoint_info.txt for details' }}"
