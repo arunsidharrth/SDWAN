@@ -1,1 +1,171 @@
+---
+- name: Get SD-WAN General Statistics
+  hosts: localhost
+  gather_facts: no
+  vars:
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    generated_dir: "{{ playbook_dir }}/../generated"
+    statistics_dir: "{{ generated_dir }}/statistics"
 
+  tasks:
+    - name: Validate required environment variables
+      fail:
+        msg: "Environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+
+    - name: Create statistics output directory
+      file:
+        path: "{{ statistics_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Test vManage connectivity
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: connectivity_test
+
+    - name: Validate vManage connectivity
+      fail:
+        msg: "Cannot connect to vManage at {{ vmanage_host }}:{{ vmanage_port }}"
+      when: connectivity_test.status != 200
+
+    - name: Get device statistics
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: device_stats
+
+    - name: Save device statistics
+      copy:
+        content: "{{ device_stats.json | to_nice_json }}"
+        dest: "{{ statistics_dir }}/device_statistics.json"
+
+    - name: Get control connections statistics
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device/control/connections"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: control_connections
+      ignore_errors: yes
+
+    - name: Save control connections statistics
+      copy:
+        content: "{{ control_connections.json | to_nice_json }}"
+        dest: "{{ statistics_dir }}/control_connections.json"
+      when: control_connections.status == 200
+
+    - name: Get BFD sessions statistics
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device/bfd/sessions"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: bfd_sessions
+      ignore_errors: yes
+
+    - name: Save BFD sessions statistics
+      copy:
+        content: "{{ bfd_sessions.json | to_nice_json }}"
+        dest: "{{ statistics_dir }}/bfd_sessions.json"
+      when: bfd_sessions.status == 200
+
+    - name: Get OMP peers statistics
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device/omp/peers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: omp_peers
+      ignore_errors: yes
+
+    - name: Save OMP peers statistics
+      copy:
+        content: "{{ omp_peers.json | to_nice_json }}"
+        dest: "{{ statistics_dir }}/omp_peers.json"
+      when: omp_peers.status == 200
+
+    - name: Get system information
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/system/device/vedges"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: system_info
+      ignore_errors: yes
+
+    - name: Save system information
+      copy:
+        content: "{{ system_info.json | to_nice_json }}"
+        dest: "{{ statistics_dir }}/system_info.json"
+      when: system_info.status == 200
+
+    - name: Get vSmart controllers statistics
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/system/device/vsmarts"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: vsmarts
+      ignore_errors: yes
+
+    - name: Save vSmart controllers statistics
+      copy:
+        content: "{{ vsmarts.json | to_nice_json }}"
+        dest: "{{ statistics_dir }}/vsmarts.json"
+      when: vsmarts.status == 200
+
+    - name: Get vBond orchestrators statistics
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/system/device/vbonds"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: vbonds
+      ignore_errors: yes
+
+    - name: Save vBond orchestrators statistics
+      copy:
+        content: "{{ vbonds.json | to_nice_json }}"
+        dest: "{{ statistics_dir }}/vbonds.json"
+      when: vbonds.status == 200
+
+    - name: Display completion message
+      debug:
+        msg: "Statistics collection completed. Files saved to {{ statistics_dir }}"
