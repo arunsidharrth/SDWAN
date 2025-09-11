@@ -1,1 +1,460 @@
-3
+---
+- name: Get Tunnel Statistics from vManage
+  hosts: localhost
+  gather_facts: false
+  vars:
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    generated_dir: "{{ playbook_dir }}/../generated"
+    tunnel_stats_dir: "{{ generated_dir }}/tunnel_statistics"
+
+  tasks:
+    - name: Validate environment variables
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+
+    - name: Create tunnel statistics directory
+      file:
+        path: "{{ tunnel_stats_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Test vManage connectivity
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: connectivity_test
+      failed_when: false
+
+    - name: Log connectivity status
+      debug:
+        msg: "vManage connectivity status: {{ connectivity_test.status | default('Connection failed') }}"
+
+    - name: Get all devices for tunnel statistics
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: devices_response
+      failed_when: false
+      when: connectivity_test.status == 200
+
+    - name: Save devices list
+      copy:
+        content: "{{ devices_response.json | to_nice_json }}"
+        dest: "{{ tunnel_stats_dir }}/devices_list.json"
+      when: 
+        - connectivity_test.status == 200
+        - devices_response.status is defined
+        - devices_response.status == 200
+
+    - name: Get tunnel statistics for all devices
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device/tunnel/statistics"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: tunnel_stats_all
+      failed_when: false
+      when: connectivity_test.status == 200
+
+    - name: Save all tunnel statistics
+      copy:
+        content: "{{ tunnel_stats_all.json | to_nice_json }}"
+        dest: "{{ tunnel_stats_dir }}/tunnel_statistics_all.json"
+      when: 
+        - connectivity_test.status == 200
+        - tunnel_stats_all.status is defined
+        - tunnel_stats_all.status == 200
+
+    - name: Get tunnel interface data
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device/tunnel/interface"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: tunnel_interface
+      failed_when: false
+      when: connectivity_test.status == 200
+
+    - name: Save tunnel interface data
+      copy:
+        content: "{{ tunnel_interface.json | to_nice_json }}"
+        dest: "{{ tunnel_stats_dir }}/tunnel_interface.json"
+      when: 
+        - connectivity_test.status == 200
+        - tunnel_interface.status is defined
+        - tunnel_interface.status == 200
+
+    - name: Get tunnel operational status
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device/tunnel/status"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: tunnel_status
+      failed_when: false
+      when: connectivity_test.status == 200
+
+    - name: Save tunnel operational status
+      copy:
+        content: "{{ tunnel_status.json | to_nice_json }}"
+        dest: "{{ tunnel_stats_dir }}/tunnel_operational_status.json"
+      when: 
+        - connectivity_test.status == 200
+        - tunnel_status.status is defined
+        - tunnel_status.status == 200
+
+    - name: Get tunnel performance metrics
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device/tunnel/performance"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: tunnel_performance
+      failed_when: false
+      when: connectivity_test.status == 200
+
+    - name: Save tunnel performance metrics
+      copy:
+        content: "{{ tunnel_performance.json | to_nice_json }}"
+        dest: "{{ tunnel_stats_dir }}/tunnel_performance.json"
+      when: 
+        - connectivity_test.status == 200
+        - tunnel_performance.status is defined
+        - tunnel_performance.status == 200
+
+    - name: Get tunnel health data
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device/tunnel/health"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: tunnel_health
+      failed_when: false
+      when: connectivity_test.status == 200
+
+    - name: Save tunnel health data
+      copy:
+        content: "{{ tunnel_health.json | to_nice_json }}"
+        dest: "{{ tunnel_stats_dir }}/tunnel_health.json"
+      when: 
+        - connectivity_test.status == 200
+        - tunnel_health.status is defined
+        - tunnel_health.status == 200
+
+    - name: Get BFD session statistics
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device/bfd/sessions"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: bfd_sessions
+      failed_when: false
+      when: connectivity_test.status == 200
+
+    - name: Save BFD session statistics
+      copy:
+        content: "{{ bfd_sessions.json | to_nice_json }}"
+        dest: "{{ tunnel_stats_dir }}/bfd_sessions.json"
+      when: 
+        - connectivity_test.status == 200
+        - bfd_sessions.status is defined
+        - bfd_sessions.status == 200
+
+    - name: Get OMP peer statistics
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device/omp/peers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: omp_peers
+      failed_when: false
+      when: connectivity_test.status == 200
+
+    - name: Save OMP peer statistics
+      copy:
+        content: "{{ omp_peers.json | to_nice_json }}"
+        dest: "{{ tunnel_stats_dir }}/omp_peers.json"
+      when: 
+        - connectivity_test.status == 200
+        - omp_peers.status is defined
+        - omp_peers.status == 200
+
+    - name: Get device-specific tunnel statistics
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device/tunnel/statistics?deviceId={{ item.deviceId }}"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: device_tunnel_stats
+      failed_when: false
+      loop: "{{ devices_response.json.data | default([]) }}"
+      when: 
+        - connectivity_test.status == 200
+        - devices_response.status is defined
+        - devices_response.status == 200
+        - devices_response.json.data is defined
+        - devices_response.json.data | length > 0
+
+    - name: Save device-specific tunnel statistics
+      copy:
+        content: "{{ item.json | to_nice_json }}"
+        dest: "{{ tunnel_stats_dir }}/tunnel_stats_{{ item.item.deviceId }}.json"
+      loop: "{{ device_tunnel_stats.results | default([]) }}"
+      when: 
+        - connectivity_test.status == 200
+        - item.status is defined
+        - item.status == 200
+        - item.json is defined
+
+    - name: Get TLOC statistics
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device/tloc"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: tloc_stats
+      failed_when: false
+      when: connectivity_test.status == 200
+
+    - name: Save TLOC statistics
+      copy:
+        content: "{{ tloc_stats.json | to_nice_json }}"
+        dest: "{{ tunnel_stats_dir }}/tloc_statistics.json"
+      when: 
+        - connectivity_test.status == 200
+        - tloc_stats.status is defined
+        - tloc_stats.status == 200
+
+    - name: Get control connection statistics
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device/control/connections"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: control_connections
+      failed_when: false
+      when: connectivity_test.status == 200
+
+    - name: Save control connection statistics
+      copy:
+        content: "{{ control_connections.json | to_nice_json }}"
+        dest: "{{ tunnel_stats_dir }}/control_connections.json"
+      when: 
+        - connectivity_test.status == 200
+        - control_connections.status is defined
+        - control_connections.status == 200
+
+    - name: Create execution summary
+      copy:
+        content: |
+          Tunnel Statistics Collection Summary
+          ===================================
+          
+          Execution Details:
+          - vManage Host: {{ vmanage_host }}
+          - vManage Port: {{ vmanage_port }}
+          - Output Directory: {{ tunnel_stats_dir }}
+          - Initial Connectivity: {% if connectivity_test.status == 200 %}SUCCESS{% else %}FAILED (Status: {{ connectivity_test.status | default('N/A') }}){% endif %}
+
+          {% if connectivity_test.status != 200 %}
+          NOTE: Initial connectivity test failed. No API calls were attempted.
+          This is common in sandbox environments where certain endpoints may be unavailable.
+          {% else %}
+          
+          API Endpoint Results:
+          {% if devices_response.status is defined and devices_response.status == 200 %}
+          ✓ Devices List: SUCCESS ({{ devices_response.json.data | default([]) | length }} devices found)
+          {% elif devices_response.status is defined %}
+          ✗ Devices List: FAILED (Status: {{ devices_response.status }})
+          {% else %}
+          - Devices List: SKIPPED (Connectivity failed)
+          {% endif %}
+          
+          {% if tunnel_stats_all.status is defined and tunnel_stats_all.status == 200 %}
+          ✓ All Tunnel Statistics: SUCCESS
+          {% elif tunnel_stats_all.status is defined %}
+          ✗ All Tunnel Statistics: FAILED (Status: {{ tunnel_stats_all.status }})
+          {% else %}
+          - All Tunnel Statistics: SKIPPED (Connectivity failed)
+          {% endif %}
+          
+          {% if tunnel_interface.status is defined and tunnel_interface.status == 200 %}
+          ✓ Tunnel Interface Data: SUCCESS
+          {% elif tunnel_interface.status is defined %}
+          ✗ Tunnel Interface Data: FAILED (Status: {{ tunnel_interface.status }})
+          {% else %}
+          - Tunnel Interface Data: SKIPPED (Connectivity failed)
+          {% endif %}
+          
+          {% if tunnel_status.status is defined and tunnel_status.status == 200 %}
+          ✓ Tunnel Operational Status: SUCCESS
+          {% elif tunnel_status.status is defined %}
+          ✗ Tunnel Operational Status: FAILED (Status: {{ tunnel_status.status }})
+          {% else %}
+          - Tunnel Operational Status: SKIPPED (Connectivity failed)
+          {% endif %}
+          
+          {% if tunnel_performance.status is defined and tunnel_performance.status == 200 %}
+          ✓ Tunnel Performance Metrics: SUCCESS
+          {% elif tunnel_performance.status is defined %}
+          ✗ Tunnel Performance Metrics: FAILED (Status: {{ tunnel_performance.status }})
+          {% else %}
+          - Tunnel Performance Metrics: SKIPPED (Connectivity failed)
+          {% endif %}
+          
+          {% if tunnel_health.status is defined and tunnel_health.status == 200 %}
+          ✓ Tunnel Health Data: SUCCESS
+          {% elif tunnel_health.status is defined %}
+          ✗ Tunnel Health Data: FAILED (Status: {{ tunnel_health.status }})
+          {% else %}
+          - Tunnel Health Data: SKIPPED (Connectivity failed)
+          {% endif %}
+          
+          {% if bfd_sessions.status is defined and bfd_sessions.status == 200 %}
+          ✓ BFD Session Statistics: SUCCESS
+          {% elif bfd_sessions.status is defined %}
+          ✗ BFD Session Statistics: FAILED (Status: {{ bfd_sessions.status }})
+          {% else %}
+          - BFD Session Statistics: SKIPPED (Connectivity failed)
+          {% endif %}
+          
+          {% if omp_peers.status is defined and omp_peers.status == 200 %}
+          ✓ OMP Peer Statistics: SUCCESS
+          {% elif omp_peers.status is defined %}
+          ✗ OMP Peer Statistics: FAILED (Status: {{ omp_peers.status }})
+          {% else %}
+          - OMP Peer Statistics: SKIPPED (Connectivity failed)
+          {% endif %}
+          
+          {% if tloc_stats.status is defined and tloc_stats.status == 200 %}
+          ✓ TLOC Statistics: SUCCESS
+          {% elif tloc_stats.status is defined %}
+          ✗ TLOC Statistics: FAILED (Status: {{ tloc_stats.status }})
+          {% else %}
+          - TLOC Statistics: SKIPPED (Connectivity failed)
+          {% endif %}
+          
+          {% if control_connections.status is defined and control_connections.status == 200 %}
+          ✓ Control Connection Statistics: SUCCESS
+          {% elif control_connections.status is defined %}
+          ✗ Control Connection Statistics: FAILED (Status: {{ control_connections.status }})
+          {% else %}
+          - Control Connection Statistics: SKIPPED (Connectivity failed)
+          {% endif %}
+          {% endif %}
+          
+          Device-Specific Tunnel Statistics:
+          {% if connectivity_test.status == 200 %}
+          {% if device_tunnel_stats.results is defined %}
+          {% for result in device_tunnel_stats.results %}
+          {% if result.status is defined and result.status == 200 %}
+          ✓ Device {{ result.item.deviceId }}: SUCCESS
+          {% elif result.status is defined %}
+          ✗ Device {{ result.item.deviceId }}: FAILED (Status: {{ result.status }})
+          {% else %}
+          ✗ Device {{ result.item.deviceId }}: FAILED (No response)
+          {% endif %}
+          {% endfor %}
+          {% else %}
+          - No device-specific tunnel statistics collected (devices list may have failed)
+          {% endif %}
+          {% else %}
+          - Device-specific tunnel statistics: SKIPPED (Connectivity failed)
+          {% endif %}
+          
+          Files Generated:
+          {% if connectivity_test.status == 200 %}
+          {% if devices_response.status is defined and devices_response.status == 200 %}
+          - devices_list.json
+          {% endif %}
+          {% if tunnel_stats_all.status is defined and tunnel_stats_all.status == 200 %}
+          - tunnel_statistics_all.json
+          {% endif %}
+          {% if tunnel_interface.status is defined and tunnel_interface.status == 200 %}
+          - tunnel_interface.json
+          {% endif %}
+          {% if tunnel_status.status is defined and tunnel_status.status == 200 %}
+          - tunnel_operational_status.json
+          {% endif %}
+          {% if tunnel_performance.status is defined and tunnel_performance.status == 200 %}
+          - tunnel_performance.json
+          {% endif %}
+          {% if tunnel_health.status is defined and tunnel_health.status == 200 %}
+          - tunnel_health.json
+          {% endif %}
+          {% if bfd_sessions.status is defined and bfd_sessions.status == 200 %}
+          - bfd_sessions.json
+          {% endif %}
+          {% if omp_peers.status is defined and omp_peers.status == 200 %}
+          - omp_peers.json
+          {% endif %}
+          {% if tloc_stats.status is defined and tloc_stats.status == 200 %}
+          - tloc_statistics.json
+          {% endif %}
+          {% if control_connections.status is defined and control_connections.status == 200 %}
+          - control_connections.json
+          {% endif %}
+          {% if device_tunnel_stats.results is defined %}
+          {% for result in device_tunnel_stats.results %}
+          {% if result.status is defined and result.status == 200 %}
+          - tunnel_stats_{{ result.item.deviceId }}.json
+          {% endif %}
+          {% endfor %}
+          {% endif %}
+          {% else %}
+          - No files generated due to connectivity failure
+          {% endif %}
+          
+        dest: "{{ tunnel_stats_dir }}/execution_summary.txt"
+
+    - name: Display completion message
+      debug:
+        msg: "Tunnel statistics collection completed. Results saved in {{ tunnel_stats_dir }}"
