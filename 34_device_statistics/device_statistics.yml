@@ -1,1 +1,227 @@
+---
+- name: Get SD-WAN Device-Specific Statistics
+  hosts: localhost
+  gather_facts: no
+  vars:
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    generated_dir: "{{ playbook_dir }}/../generated"
+    device_stats_dir: "{{ generated_dir }}/device_statistics"
 
+  tasks:
+    - name: Validate required environment variables
+      fail:
+        msg: "Environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+
+    - name: Create device statistics output directory
+      file:
+        path: "{{ device_stats_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Test vManage connectivity
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: connectivity_test
+
+    - name: Validate vManage connectivity
+      fail:
+        msg: "Cannot connect to vManage at {{ vmanage_host }}:{{ vmanage_port }}"
+      when: connectivity_test.status != 200
+
+    - name: Get device list
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: device_list
+      ignore_errors: yes
+
+    - name: Save device list
+      copy:
+        content: "{{ device_list.json | to_nice_json }}"
+        dest: "{{ device_stats_dir }}/device_list.json"
+      when: device_list.status == 200
+
+    - name: Get device interface statistics
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device/interface/stats"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: interface_stats
+      ignore_errors: yes
+
+    - name: Save device interface statistics
+      copy:
+        content: "{{ interface_stats.json | to_nice_json }}"
+        dest: "{{ device_stats_dir }}/interface_statistics.json"
+      when: interface_stats.status == 200
+
+    - name: Get device memory statistics
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device/memory"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: memory_stats
+      ignore_errors: yes
+
+    - name: Save device memory statistics
+      copy:
+        content: "{{ memory_stats.json | to_nice_json }}"
+        dest: "{{ device_stats_dir }}/memory_statistics.json"
+      when: memory_stats.status == 200
+
+    - name: Get device CPU statistics
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device/cpu"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: cpu_stats
+      ignore_errors: yes
+
+    - name: Save device CPU statistics
+      copy:
+        content: "{{ cpu_stats.json | to_nice_json }}"
+        dest: "{{ device_stats_dir }}/cpu_statistics.json"
+      when: cpu_stats.status == 200
+
+    - name: Get device disk statistics
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device/disk"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: disk_stats
+      ignore_errors: yes
+
+    - name: Save device disk statistics
+      copy:
+        content: "{{ disk_stats.json | to_nice_json }}"
+        dest: "{{ device_stats_dir }}/disk_statistics.json"
+      when: disk_stats.status == 200
+
+    - name: Get device tunnel statistics
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device/tunnel/statistics"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: tunnel_stats
+      ignore_errors: yes
+
+    - name: Save device tunnel statistics
+      copy:
+        content: "{{ tunnel_stats.json | to_nice_json }}"
+        dest: "{{ device_stats_dir }}/tunnel_statistics.json"
+      when: tunnel_stats.status == 200
+
+    - name: Get device app-route statistics
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device/app-route/statistics"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: app_route_stats
+      ignore_errors: yes
+
+    - name: Save device app-route statistics
+      copy:
+        content: "{{ app_route_stats.json | to_nice_json }}"
+        dest: "{{ device_stats_dir }}/app_route_statistics.json"
+      when: app_route_stats.status == 200
+
+    - name: Get device hardware statistics
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device/hardware/status"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: hardware_stats
+      ignore_errors: yes
+
+    - name: Save device hardware statistics
+      copy:
+        content: "{{ hardware_stats.json | to_nice_json }}"
+        dest: "{{ device_stats_dir }}/hardware_statistics.json"
+      when: hardware_stats.status == 200
+
+    - name: Get device environment statistics
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device/hardware/environment"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: environment_stats
+      ignore_errors: yes
+
+    - name: Save device environment statistics
+      copy:
+        content: "{{ environment_stats.json | to_nice_json }}"
+        dest: "{{ device_stats_dir }}/environment_statistics.json"
+      when: environment_stats.status == 200
+
+    - name: Get device uptime statistics
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device/system/status"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: uptime_stats
+      ignore_errors: yes
+
+    - name: Save device uptime statistics
+      copy:
+        content: "{{ uptime_stats.json | to_nice_json }}"
+        dest: "{{ device_stats_dir }}/uptime_statistics.json"
+      when: uptime_stats.status == 200
+
+    - name: Display completion message
+      debug:
+        msg: "Device statistics collection completed. Files saved to {{ device_stats_dir }}"
