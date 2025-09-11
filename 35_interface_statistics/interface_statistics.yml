@@ -1,1 +1,309 @@
+---
+- name: Get Interface Statistics from vManage
+  hosts: localhost
+  gather_facts: false
+  vars:
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    generated_dir: "{{ playbook_dir }}/../generated"
+    interface_stats_dir: "{{ generated_dir }}/interface_statistics"
 
+  tasks:
+    - name: Validate environment variables
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+
+    - name: Create interface statistics directory
+      file:
+        path: "{{ interface_stats_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Test vManage connectivity
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: connectivity_test
+      failed_when: false
+
+    - name: Validate connectivity
+      fail:
+        msg: "Cannot connect to vManage at {{ vmanage_host }}:{{ vmanage_port }}. Status: {{ connectivity_test.status | default('Connection failed') }}"
+      when: connectivity_test.status != 200
+
+    - name: Get all devices for interface statistics
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: devices_response
+      failed_when: false
+
+    - name: Save devices list
+      copy:
+        content: "{{ devices_response.json | to_nice_json }}"
+        dest: "{{ interface_stats_dir }}/devices_list.json"
+      when: devices_response.status == 200
+
+    - name: Get interface statistics for all devices
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device/interface/stats"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: interface_stats_all
+      failed_when: false
+
+    - name: Save all interface statistics
+      copy:
+        content: "{{ interface_stats_all.json | to_nice_json }}"
+        dest: "{{ interface_stats_dir }}/interface_statistics_all.json"
+      when: interface_stats_all.status == 200
+
+    - name: Get interface counters
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device/counters"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: interface_counters
+      failed_when: false
+
+    - name: Save interface counters
+      copy:
+        content: "{{ interface_counters.json | to_nice_json }}"
+        dest: "{{ interface_stats_dir }}/interface_counters.json"
+      when: interface_counters.status == 200
+
+    - name: Get interface operational data
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device/interface"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: interface_operational
+      failed_when: false
+
+    - name: Save interface operational data
+      copy:
+        content: "{{ interface_operational.json | to_nice_json }}"
+        dest: "{{ interface_stats_dir }}/interface_operational.json"
+      when: interface_operational.status == 200
+
+    - name: Get device-specific interface statistics (for each device)
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device/interface/stats?deviceId={{ item.deviceId }}"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: device_interface_stats
+      failed_when: false
+      loop: "{{ devices_response.json.data | default([]) }}"
+      when: 
+        - devices_response.status == 200
+        - devices_response.json.data is defined
+        - devices_response.json.data | length > 0
+
+    - name: Save device-specific interface statistics
+      copy:
+        content: "{{ item.json | to_nice_json }}"
+        dest: "{{ interface_stats_dir }}/interface_stats_{{ item.item.deviceId }}.json"
+      loop: "{{ device_interface_stats.results | default([]) }}"
+      when: 
+        - item.status == 200
+        - item.json is defined
+
+    - name: Get interface health statistics
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device/interface/health"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: interface_health
+      failed_when: false
+
+    - name: Save interface health statistics
+      copy:
+        content: "{{ interface_health.json | to_nice_json }}"
+        dest: "{{ interface_stats_dir }}/interface_health.json"
+      when: interface_health.status == 200
+
+    - name: Get tunnel interface statistics
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device/tunnel/statistics"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: tunnel_stats
+      failed_when: false
+
+    - name: Save tunnel interface statistics
+      copy:
+        content: "{{ tunnel_stats.json | to_nice_json }}"
+        dest: "{{ interface_stats_dir }}/tunnel_statistics.json"
+      when: tunnel_stats.status == 200
+
+    - name: Get WAN interface statistics
+      uri:
+        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/device/wan/interface/stats"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 60
+      register: wan_interface_stats
+      failed_when: false
+
+    - name: Save WAN interface statistics
+      copy:
+        content: "{{ wan_interface_stats.json | to_nice_json }}"
+        dest: "{{ interface_stats_dir }}/wan_interface_statistics.json"
+      when: wan_interface_stats.status == 200
+
+    - name: Create execution summary
+      copy:
+        content: |
+          Interface Statistics Collection Summary
+          =====================================
+          
+          Execution Details:
+          - vManage Host: {{ vmanage_host }}
+          - vManage Port: {{ vmanage_port }}
+          - Output Directory: {{ interface_stats_dir }}
+          
+          API Endpoint Results:
+          {% if devices_response.status == 200 %}
+          ✓ Devices List: SUCCESS ({{ devices_response.json.data | default([]) | length }} devices found)
+          {% else %}
+          ✗ Devices List: FAILED (Status: {{ devices_response.status | default('N/A') }})
+          {% endif %}
+          
+          {% if interface_stats_all.status == 200 %}
+          ✓ All Interface Statistics: SUCCESS
+          {% else %}
+          ✗ All Interface Statistics: FAILED (Status: {{ interface_stats_all.status | default('N/A') }})
+          {% endif %}
+          
+          {% if interface_counters.status == 200 %}
+          ✓ Interface Counters: SUCCESS
+          {% else %}
+          ✗ Interface Counters: FAILED (Status: {{ interface_counters.status | default('N/A') }})
+          {% endif %}
+          
+          {% if interface_operational.status == 200 %}
+          ✓ Interface Operational Data: SUCCESS
+          {% else %}
+          ✗ Interface Operational Data: FAILED (Status: {{ interface_operational.status | default('N/A') }})
+          {% endif %}
+          
+          {% if interface_health.status == 200 %}
+          ✓ Interface Health Statistics: SUCCESS
+          {% else %}
+          ✗ Interface Health Statistics: FAILED (Status: {{ interface_health.status | default('N/A') }})
+          {% endif %}
+          
+          {% if tunnel_stats.status == 200 %}
+          ✓ Tunnel Interface Statistics: SUCCESS
+          {% else %}
+          ✗ Tunnel Interface Statistics: FAILED (Status: {{ tunnel_stats.status | default('N/A') }})
+          {% endif %}
+          
+          {% if wan_interface_stats.status == 200 %}
+          ✓ WAN Interface Statistics: SUCCESS
+          {% else %}
+          ✗ WAN Interface Statistics: FAILED (Status: {{ wan_interface_stats.status | default('N/A') }})
+          {% endif %}
+          
+          Device-Specific Statistics:
+          {% if connectivity_test.status == 200 %}
+          {% if device_interface_stats.results is defined %}
+          {% for result in device_interface_stats.results %}
+          {% if result.status is defined and result.status == 200 %}
+          ✓ Device {{ result.item.deviceId }}: SUCCESS
+          {% elif result.status is defined %}
+          ✗ Device {{ result.item.deviceId }}: FAILED (Status: {{ result.status }})
+          {% else %}
+          ✗ Device {{ result.item.deviceId }}: FAILED (No response)
+          {% endif %}
+          {% endfor %}
+          {% else %}
+          - No device-specific statistics collected (devices list may have failed)
+          {% endif %}
+          {% else %}
+          - Device-specific statistics: SKIPPED (Connectivity failed)
+          {% endif %}
+          
+          Files Generated:
+          {% if connectivity_test.status == 200 %}
+          {% if devices_response.status is defined and devices_response.status == 200 %}
+          - devices_list.json
+          {% endif %}
+          {% if interface_stats_all.status is defined and interface_stats_all.status == 200 %}
+          - interface_statistics_all.json
+          {% endif %}
+          {% if interface_counters.status is defined and interface_counters.status == 200 %}
+          - interface_counters.json
+          {% endif %}
+          {% if interface_operational.status is defined and interface_operational.status == 200 %}
+          - interface_operational.json
+          {% endif %}
+          {% if interface_health.status is defined and interface_health.status == 200 %}
+          - interface_health.json
+          {% endif %}
+          {% if tunnel_stats.status is defined and tunnel_stats.status == 200 %}
+          - tunnel_statistics.json
+          {% endif %}
+          {% if wan_interface_stats.status is defined and wan_interface_stats.status == 200 %}
+          - wan_interface_statistics.json
+          {% endif %}
+          {% if device_interface_stats.results is defined %}
+          {% for result in device_interface_stats.results %}
+          {% if result.status is defined and result.status == 200 %}
+          - interface_stats_{{ result.item.deviceId }}.json
+          {% endif %}
+          {% endfor %}
+          {% endif %}
+          {% else %}
+          - No files generated due to connectivity failure
+          {% endif %}
+          
+        dest: "{{ interface_stats_dir }}/execution_summary.txt"
+
+    - name: Display completion message
+      debug:
+        msg: "Interface statistics collection completed. Results saved in {{ interface_stats_dir }}"
