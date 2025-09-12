@@ -1,1 +1,393 @@
+---
+- name: Get DPI Statistics - Use Case 37
+  hosts: localhost
+  gather_facts: true
+  connection: local
+  vars:
+    # Use environment variables for credentials
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    
+    # Directory structure
+    generated_dir: "{{ playbook_dir }}/../generated"
+    dpi_dir: "{{ generated_dir }}/dpi_statistics"
 
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+
+    - name: Create generated directory structure
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ generated_dir }}"
+        - "{{ dpi_dir }}"
+
+    - name: Test vManage connectivity
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: connectivity_test
+      failed_when: false
+
+    - name: Fail if connectivity test failed
+      fail:
+        msg: "Cannot connect to vManage at {{ vmanage_host }}"
+      when: connectivity_test.status is not defined or connectivity_test.status != 200
+
+    - name: Get list of all devices
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: devices_list
+      failed_when: false
+
+    - name: Handle devices list API errors gracefully
+      set_fact:
+        devices_available: "{{ devices_list.status is defined and devices_list.status == 200 }}"
+        devices_data: "{{ devices_list.json.data if (devices_list.status is defined and devices_list.status == 200) else [] }}"
+
+    - name: Get DPI summary statistics
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/statistics/dpi/summary"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: dpi_summary
+      failed_when: false
+
+    - name: Get DPI applications statistics
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/statistics/dpi/applications"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: dpi_applications
+      failed_when: false
+
+    - name: Get DPI flows statistics
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/statistics/dpi/flows"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: dpi_flows
+      failed_when: false
+
+    - name: Get DPI top applications
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/statistics/dpi/top-applications"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: dpi_top_apps
+      failed_when: false
+
+    - name: Save devices list to file
+      copy:
+        content: |
+          Devices List for DPI Statistics - {{ ansible_date_time.iso8601 }}
+          =============================================================
+          vManage Host: {{ vmanage_host }}
+          API Status: {{ 'Available' if devices_available else 'Unavailable (HTTP ' + (devices_list.status|string) + ')' }}
+          
+          {% if devices_available %}
+          Total Devices: {{ devices_data | length }}
+          
+          Device Inventory:
+          {% for device in devices_data %}
+          - Hostname: {{ device.hostname | default('N/A') }}
+            System IP: {{ device['system-ip'] | default('N/A') }}
+            Device Type: {{ device['device-type'] | default('N/A') }}
+            Device Model: {{ device['device-model'] | default('N/A') }}
+            Version: {{ device.version | default('N/A') }}
+            Site ID: {{ device['site-id'] | default('N/A') }}
+            Status: {{ device.status | default('N/A') }}
+            Reachability: {{ device.reachability | default('N/A') }}
+            Uptime: {{ device['uptime-date'] | default('N/A') }}
+          {% endfor %}
+          {% else %}
+          Error Details:
+          Status Code: {{ devices_list.status | default('N/A') }}
+          Error Message: {{ devices_list.msg | default('Unknown error') }}
+          {% endif %}
+        dest: "{{ dpi_dir }}/devices_list.txt"
+
+    - name: Save DPI summary statistics to file
+      copy:
+        content: |
+          DPI Summary Statistics - {{ ansible_date_time.iso8601 }}
+          =====================================================
+          vManage Host: {{ vmanage_host }}
+          API Status: {{ 'Available' if (dpi_summary.status is defined and dpi_summary.status == 200) else 'Unavailable (HTTP ' + (dpi_summary.status|string) + ')' }}
+          
+          {% if dpi_summary.status is defined and dpi_summary.status == 200 %}
+          DPI Summary Data:
+          {% if dpi_summary.json.data is defined %}
+          {% for summary_item in dpi_summary.json.data %}
+          - Device IP: {{ summary_item.device_ip | default('N/A') }}
+            Hostname: {{ summary_item.hostname | default('N/A') }}
+            Total Flows: {{ summary_item.total_flows | default('N/A') }}
+            Total Applications: {{ summary_item.total_applications | default('N/A') }}
+            Total Bytes: {{ summary_item.total_bytes | default('N/A') }}
+            Total Packets: {{ summary_item.total_packets | default('N/A') }}
+            Timestamp: {{ summary_item.timestamp | default('N/A') }}
+            Entry Time: {{ summary_item.entry_time | default('N/A') }}
+          {% endfor %}
+          {% else %}
+          No DPI summary data available.
+          {% endif %}
+          {% else %}
+          Error Details:
+          Status Code: {{ dpi_summary.status | default('N/A') }}
+          Error Message: {{ dpi_summary.msg | default('Unknown error') }}
+          {% endif %}
+        dest: "{{ dpi_dir }}/dpi_summary_statistics.txt"
+
+    - name: Save DPI applications statistics to file
+      copy:
+        content: |
+          DPI Applications Statistics - {{ ansible_date_time.iso8601 }}
+          =========================================================
+          vManage Host: {{ vmanage_host }}
+          API Status: {{ 'Available' if (dpi_applications.status is defined and dpi_applications.status == 200) else 'Unavailable (HTTP ' + (dpi_applications.status|string) + ')' }}
+          
+          {% if dpi_applications.status is defined and dpi_applications.status == 200 %}
+          DPI Applications Data:
+          {% if dpi_applications.json.data is defined %}
+          {% for app_item in dpi_applications.json.data %}
+          - Device IP: {{ app_item.device_ip | default('N/A') }}
+            Hostname: {{ app_item.hostname | default('N/A') }}
+            Application: {{ app_item.application | default('N/A') }}
+            Application Family: {{ app_item.application_family | default('N/A') }}
+            Bytes: {{ app_item.bytes | default('N/A') }}
+            Packets: {{ app_item.packets | default('N/A') }}
+            Flows: {{ app_item.flows | default('N/A') }}
+            Percentage: {{ app_item.percentage | default('N/A') }}
+            Timestamp: {{ app_item.timestamp | default('N/A') }}
+            Entry Time: {{ app_item.entry_time | default('N/A') }}
+          {% endfor %}
+          {% else %}
+          No DPI applications data available.
+          {% endif %}
+          {% else %}
+          Error Details:
+          Status Code: {{ dpi_applications.status | default('N/A') }}
+          Error Message: {{ dpi_applications.msg | default('Unknown error') }}
+          {% endif %}
+        dest: "{{ dpi_dir }}/dpi_applications_statistics.txt"
+
+    - name: Save DPI flows statistics to file
+      copy:
+        content: |
+          DPI Flows Statistics - {{ ansible_date_time.iso8601 }}
+          ==============================================
+          vManage Host: {{ vmanage_host }}
+          API Status: {{ 'Available' if (dpi_flows.status is defined and dpi_flows.status == 200) else 'Unavailable (HTTP ' + (dpi_flows.status|string) + ')' }}
+          
+          {% if dpi_flows.status is defined and dpi_flows.status == 200 %}
+          DPI Flows Data:
+          {% if dpi_flows.json.data is defined %}
+          {% for flow_item in dpi_flows.json.data %}
+          - Device IP: {{ flow_item.device_ip | default('N/A') }}
+            Hostname: {{ flow_item.hostname | default('N/A') }}
+            Flow ID: {{ flow_item.flow_id | default('N/A') }}
+            Source IP: {{ flow_item.source_ip | default('N/A') }}
+            Destination IP: {{ flow_item.destination_ip | default('N/A') }}
+            Source Port: {{ flow_item.source_port | default('N/A') }}
+            Destination Port: {{ flow_item.destination_port | default('N/A') }}
+            Protocol: {{ flow_item.protocol | default('N/A') }}
+            Application: {{ flow_item.application | default('N/A') }}
+            Application Family: {{ flow_item.application_family | default('N/A') }}
+            Bytes: {{ flow_item.bytes | default('N/A') }}
+            Packets: {{ flow_item.packets | default('N/A') }}
+            Duration: {{ flow_item.duration | default('N/A') }}
+            Timestamp: {{ flow_item.timestamp | default('N/A') }}
+            Entry Time: {{ flow_item.entry_time | default('N/A') }}
+          {% endfor %}
+          {% else %}
+          No DPI flows data available.
+          {% endif %}
+          {% else %}
+          Error Details:
+          Status Code: {{ dpi_flows.status | default('N/A') }}
+          Error Message: {{ dpi_flows.msg | default('Unknown error') }}
+          {% endif %}
+        dest: "{{ dpi_dir }}/dpi_flows_statistics.txt"
+
+    - name: Save DPI top applications to file
+      copy:
+        content: |
+          DPI Top Applications - {{ ansible_date_time.iso8601 }}
+          ============================================
+          vManage Host: {{ vmanage_host }}
+          API Status: {{ 'Available' if (dpi_top_apps.status is defined and dpi_top_apps.status == 200) else 'Unavailable (HTTP ' + (dpi_top_apps.status|string) + ')' }}
+          
+          {% if dpi_top_apps.status is defined and dpi_top_apps.status == 200 %}
+          Top Applications Data:
+          {% if dpi_top_apps.json.data is defined %}
+          {% for top_app in dpi_top_apps.json.data %}
+          - Rank: {{ loop.index }}
+            Application: {{ top_app.application | default('N/A') }}
+            Application Family: {{ top_app.application_family | default('N/A') }}
+            Total Bytes: {{ top_app.total_bytes | default('N/A') }}
+            Total Packets: {{ top_app.total_packets | default('N/A') }}
+            Total Flows: {{ top_app.total_flows | default('N/A') }}
+            Percentage: {{ top_app.percentage | default('N/A') }}
+            Average Bandwidth: {{ top_app.avg_bandwidth | default('N/A') }}
+            Peak Bandwidth: {{ top_app.peak_bandwidth | default('N/A') }}
+            Devices Count: {{ top_app.devices_count | default('N/A') }}
+          {% endfor %}
+          {% else %}
+          No DPI top applications data available.
+          {% endif %}
+          {% else %}
+          Error Details:
+          Status Code: {{ dpi_top_apps.status | default('N/A') }}
+          Error Message: {{ dpi_top_apps.msg | default('Unknown error') }}
+          {% endif %}
+        dest: "{{ dpi_dir }}/dpi_top_applications.txt"
+
+    - name: Get device-specific DPI statistics for each device
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/statistics/dpi/device/{{ item['system-ip'] }}"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: device_dpi_stats
+      failed_when: false
+      loop: "{{ devices_data }}"
+      when: devices_available and devices_data | length > 0
+
+    - name: Save device-specific DPI statistics to files
+      copy:
+        content: |
+          Device-Specific DPI Statistics - {{ ansible_date_time.iso8601 }}
+          ============================================================
+          vManage Host: {{ vmanage_host }}
+          Device Hostname: {{ item.item.hostname | default('N/A') }}
+          Device System IP: {{ item.item['system-ip'] | default('N/A') }}
+          Device Type: {{ item.item['device-type'] | default('N/A') }}
+          API Status: {{ 'Available' if (item.status is defined and item.status == 200) else 'Unavailable (HTTP ' + (item.status|string) + ')' }}
+          
+          {% if item.status is defined and item.status == 200 %}
+          Device DPI Statistics:
+          {% if item.json.data is defined %}
+          {% for dpi_stat in item.json.data %}
+          - Application: {{ dpi_stat.application | default('N/A') }}
+            Application Family: {{ dpi_stat.application_family | default('N/A') }}
+            Bytes Sent: {{ dpi_stat.bytes_sent | default('N/A') }}
+            Bytes Received: {{ dpi_stat.bytes_received | default('N/A') }}
+            Packets Sent: {{ dpi_stat.packets_sent | default('N/A') }}
+            Packets Received: {{ dpi_stat.packets_received | default('N/A') }}
+            Sessions: {{ dpi_stat.sessions | default('N/A') }}
+            Flows: {{ dpi_stat.flows | default('N/A') }}
+            Average Session Duration: {{ dpi_stat.avg_session_duration | default('N/A') }}
+            Peak Bandwidth: {{ dpi_stat.peak_bandwidth | default('N/A') }}
+            Timestamp: {{ dpi_stat.timestamp | default('N/A') }}
+          {% endfor %}
+          {% else %}
+          No device-specific DPI data available.
+          {% endif %}
+          {% else %}
+          Error Details:
+          Status Code: {{ item.status | default('N/A') }}
+          Error Message: {{ item.msg | default('Unknown error') }}
+          {% endif %}
+        dest: "{{ dpi_dir }}/device_dpi_stats_{{ item.item.hostname | default('unknown') | regex_replace('[^A-Za-z0-9_-]', '_') }}.txt"
+      loop: "{{ device_dpi_stats.results | default([]) }}"
+      when: devices_available
+
+    - name: Create execution summary
+      copy:
+        content: |
+          SD-WAN DPI Statistics Collection - Execution Summary
+          ==================================================
+          Execution Time: {{ ansible_date_time.iso8601 }}
+          vManage Host: {{ vmanage_host }}
+          
+          API Endpoint Results:
+          - Devices List: {{ 'SUCCESS' if devices_available else 'FAILED - HTTP ' + (devices_list.status|string) }}
+          - DPI Summary: {{ 'SUCCESS' if (dpi_summary.status is defined and dpi_summary.status == 200) else 'FAILED - HTTP ' + (dpi_summary.status|string) }}
+          - DPI Applications: {{ 'SUCCESS' if (dpi_applications.status is defined and dpi_applications.status == 200) else 'FAILED - HTTP ' + (dpi_applications.status|string) }}
+          - DPI Flows: {{ 'SUCCESS' if (dpi_flows.status is defined and dpi_flows.status == 200) else 'FAILED - HTTP ' + (dpi_flows.status|string) }}
+          - DPI Top Applications: {{ 'SUCCESS' if (dpi_top_apps.status is defined and dpi_top_apps.status == 200) else 'FAILED - HTTP ' + (dpi_top_apps.status|string) }}
+          - Device-Specific DPI Stats: {{ (device_dpi_stats.results | default([]) | length) if devices_available else 0 }} devices processed
+          
+          Total Devices Found: {{ devices_data | length if devices_available else 0 }}
+          
+          Files Created:
+          - devices_list.txt
+          - dpi_summary_statistics.txt
+          - dpi_applications_statistics.txt
+          - dpi_flows_statistics.txt
+          - dpi_top_applications.txt
+          {% if devices_available %}
+          {% for device in devices_data %}
+          - device_dpi_stats_{{ device.hostname | default('unknown') | regex_replace('[^A-Za-z0-9_-]', '_') }}.txt
+          {% endfor %}
+          {% endif %}
+          
+          Notes:
+          - All files saved to: {{ dpi_dir }}
+          - HTTP 403/503 errors are handled gracefully
+          - Available endpoints processed successfully
+          - Unavailable endpoints logged with error details
+          - DPI statistics may vary based on traffic patterns and time period
+        dest: "{{ dpi_dir }}/execution_summary.txt"
