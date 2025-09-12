@@ -1,1 +1,449 @@
+---
+- name: Get BFD Sessions - Use Case 38
+  hosts: localhost
+  gather_facts: true
+  connection: local
+  vars:
+    # Use environment variables for credentials
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    
+    # Initialize status variables
+    vmanage_connected: false
+    connectivity_status: "Unknown"
+    
+    # Directory structure
+    generated_dir: "{{ playbook_dir }}/../generated"
+    bfd_dir: "{{ generated_dir }}/bfd_sessions"
 
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+
+    - name: Create generated directory structure
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ generated_dir }}"
+        - "{{ bfd_dir }}"
+
+    - name: Test vManage connectivity
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: connectivity_test
+      failed_when: false
+
+    - name: Fail if connectivity test failed
+      fail:
+        msg: "Cannot connect to vManage at {{ vmanage_host }}"
+      when: connectivity_test.status is not defined or connectivity_test.status != 200
+
+    - name: Get list of all devices
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: devices_list
+      failed_when: false
+
+    - name: Handle devices list API errors gracefully
+      set_fact:
+        devices_available: "{{ devices_list.status is defined and devices_list.status == 200 }}"
+        devices_data: "{{ devices_list.json.data if (devices_list.status is defined and devices_list.status == 200) else [] }}"
+
+    - name: Get all BFD sessions
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/bfd/sessions"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: bfd_sessions
+      failed_when: false
+
+    - name: Get BFD summary statistics
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/bfd/summary"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: bfd_summary
+      failed_when: false
+
+    - name: Get BFD history
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/bfd/history"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: bfd_history
+      failed_when: false
+
+    - name: Get BFD links status
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/bfd/links"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: bfd_links
+      failed_when: false
+
+    - name: Save devices list to file
+      copy:
+        content: |
+          Devices List for BFD Sessions - {{ ansible_date_time.iso8601 }}
+          ========================================================
+          vManage Host: {{ vmanage_host }}
+          API Status: {{ 'Available' if devices_available else 'Unavailable (HTTP ' + (devices_list.status|string) + ')' }}
+          
+          {% if devices_available %}
+          Total Devices: {{ devices_data | length }}
+          
+          Device Inventory:
+          {% for device in devices_data %}
+          - Hostname: {{ device.hostname | default('N/A') }}
+            System IP: {{ device['system-ip'] | default('N/A') }}
+            Device Type: {{ device['device-type'] | default('N/A') }}
+            Device Model: {{ device['device-model'] | default('N/A') }}
+            Version: {{ device.version | default('N/A') }}
+            Site ID: {{ device['site-id'] | default('N/A') }}
+            Status: {{ device.status | default('N/A') }}
+            Reachability: {{ device.reachability | default('N/A') }}
+            Local System IP: {{ device['local-system-ip'] | default('N/A') }}
+            Uptime: {{ device['uptime-date'] | default('N/A') }}
+          {% endfor %}
+          {% else %}
+          Error Details:
+          Status Code: {{ devices_list.status | default('N/A') }}
+          Error Message: {{ devices_list.msg | default('Unknown error') }}
+          {% endif %}
+        dest: "{{ bfd_dir }}/devices_list.txt"
+
+    - name: Save BFD sessions to file
+      copy:
+        content: |
+          BFD Sessions - {{ ansible_date_time.iso8601 }}
+          ========================================
+          vManage Host: {{ vmanage_host }}
+          API Status: {{ 'Available' if (bfd_sessions.status is defined and bfd_sessions.status == 200) else 'Unavailable (HTTP ' + (bfd_sessions.status|string) + ')' }}
+          
+          {% if bfd_sessions.status is defined and bfd_sessions.status == 200 %}
+          BFD Sessions Data:
+          {% if bfd_sessions.json.data is defined %}
+          Total Sessions: {{ bfd_sessions.json.data | length }}
+          
+          {% for session in bfd_sessions.json.data %}
+          Session {{ loop.index }}:
+          - System IP: {{ session['system-ip'] | default('N/A') }}
+            Hostname: {{ session.hostname | default('N/A') }}
+            Site ID: {{ session['site-id'] | default('N/A') }}
+            Local Color: {{ session['local-color'] | default('N/A') }}
+            Remote Color: {{ session['remote-color'] | default('N/A') }}
+            Source IP: {{ session['src-ip'] | default('N/A') }}
+            Destination IP: {{ session['dst-ip'] | default('N/A') }}
+            Source Port: {{ session['src-port'] | default('N/A') }}
+            Destination Port: {{ session['dst-port'] | default('N/A') }}
+            Protocol: {{ session.proto | default('N/A') }}
+            Detect Multiplier: {{ session['detect-multiplier'] | default('N/A') }}
+            TX Interval: {{ session['tx-interval'] | default('N/A') }}
+            RX Interval: {{ session['rx-interval'] | default('N/A') }}
+            State: {{ session.state | default('N/A') }}
+            Transitions: {{ session.transitions | default('N/A') }}
+            TX Packets: {{ session['tx-packets'] | default('N/A') }}
+            RX Packets: {{ session['rx-packets'] | default('N/A') }}
+            Uptime: {{ session.uptime | default('N/A') }}
+            Downtime: {{ session.downtime | default('N/A') }}
+          
+          {% endfor %}
+          {% else %}
+          No BFD sessions data available.
+          {% endif %}
+          {% else %}
+          Error Details:
+          Status Code: {{ bfd_sessions.status | default('N/A') }}
+          Error Message: {{ bfd_sessions.msg | default('Unknown error') }}
+          {% endif %}
+        dest: "{{ bfd_dir }}/bfd_sessions.txt"
+
+    - name: Save BFD summary to file
+      copy:
+        content: |
+          BFD Summary Statistics - {{ ansible_date_time.iso8601 }}
+          ===============================================
+          vManage Host: {{ vmanage_host }}
+          API Status: {{ 'Available' if (bfd_summary.status is defined and bfd_summary.status == 200) else 'Unavailable (HTTP ' + (bfd_summary.status|string) + ')' }}
+          
+          {% if bfd_summary.status is defined and bfd_summary.status == 200 %}
+          BFD Summary Data:
+          {% if bfd_summary.json.data is defined %}
+          {% for summary_item in bfd_summary.json.data %}
+          - System IP: {{ summary_item['system-ip'] | default('N/A') }}
+            Hostname: {{ summary_item.hostname | default('N/A') }}
+            Site ID: {{ summary_item['site-id'] | default('N/A') }}
+            Total Sessions: {{ summary_item['sessions-total'] | default('N/A') }}
+            Sessions Up: {{ summary_item['sessions-up'] | default('N/A') }}
+            Sessions Down: {{ summary_item['sessions-down'] | default('N/A') }}
+            Total Flaps: {{ summary_item['sessions-flap'] | default('N/A') }}
+            Percentage Up: {{ summary_item['percentage-up'] | default('N/A') }}%
+            Last Updated: {{ summary_item['lastupdated'] | default('N/A') }}
+            Entry Time: {{ summary_item['entry_time'] | default('N/A') }}
+          
+          {% endfor %}
+          {% else %}
+          No BFD summary data available.
+          {% endif %}
+          {% else %}
+          Error Details:
+          Status Code: {{ bfd_summary.status | default('N/A') }}
+          Error Message: {{ bfd_summary.msg | default('Unknown error') }}
+          {% endif %}
+        dest: "{{ bfd_dir }}/bfd_summary.txt"
+
+    - name: Save BFD history to file
+      copy:
+        content: |
+          BFD History - {{ ansible_date_time.iso8601 }}
+          ====================================
+          vManage Host: {{ vmanage_host }}
+          API Status: {{ 'Available' if (bfd_history.status is defined and bfd_history.status == 200) else 'Unavailable (HTTP ' + (bfd_history.status|string) + ')' }}
+          
+          {% if bfd_history.status is defined and bfd_history.status == 200 %}
+          BFD History Data:
+          {% if bfd_history.json.data is defined %}
+          Total History Entries: {{ bfd_history.json.data | length }}
+          
+          {% for history_item in bfd_history.json.data %}
+          History Entry {{ loop.index }}:
+          - System IP: {{ history_item['system-ip'] | default('N/A') }}
+            Hostname: {{ history_item.hostname | default('N/A') }}
+            Site ID: {{ history_item['site-id'] | default('N/A') }}
+            Remote System IP: {{ history_item['remote-system-ip'] | default('N/A') }}
+            Local Color: {{ history_item['local-color'] | default('N/A') }}
+            Remote Color: {{ history_item['remote-color'] | default('N/A') }}
+            Source IP: {{ history_item['src-ip'] | default('N/A') }}
+            Destination IP: {{ history_item['dst-ip'] | default('N/A') }}
+            Event: {{ history_item.event | default('N/A') }}
+            Event Time: {{ history_item['event-time'] | default('N/A') }}
+            State: {{ history_item.state | default('N/A') }}
+            RX Interval: {{ history_item['rx-interval'] | default('N/A') }}
+            TX Interval: {{ history_item['tx-interval'] | default('N/A') }}
+            Detect Multiplier: {{ history_item['detect-multiplier'] | default('N/A') }}
+          
+          {% endfor %}
+          {% else %}
+          No BFD history data available.
+          {% endif %}
+          {% else %}
+          Error Details:
+          Status Code: {{ bfd_history.status | default('N/A') }}
+          Error Message: {{ bfd_history.msg | default('Unknown error') }}
+          {% endif %}
+        dest: "{{ bfd_dir }}/bfd_history.txt"
+
+    - name: Save BFD links to file
+      copy:
+        content: |
+          BFD Links Status - {{ ansible_date_time.iso8601 }}
+          ========================================
+          vManage Host: {{ vmanage_host }}
+          API Status: {{ 'Available' if (bfd_links.status is defined and bfd_links.status == 200) else 'Unavailable (HTTP ' + (bfd_links.status|string) + ')' }}
+          
+          {% if bfd_links.status is defined and bfd_links.status == 200 %}
+          BFD Links Data:
+          {% if bfd_links.json.data is defined %}
+          Total Links: {{ bfd_links.json.data | length }}
+          
+          {% for link in bfd_links.json.data %}
+          Link {{ loop.index }}:
+          - System IP: {{ link['system-ip'] | default('N/A') }}
+            Hostname: {{ link.hostname | default('N/A') }}
+            Site ID: {{ link['site-id'] | default('N/A') }}
+            Interface: {{ link.interface | default('N/A') }}
+            Public IP: {{ link['public-ip'] | default('N/A') }}
+            Public Port: {{ link['public-port'] | default('N/A') }}
+            Private IP: {{ link['private-ip'] | default('N/A') }}
+            Private Port: {{ link['private-port'] | default('N/A') }}
+            Color: {{ link.color | default('N/A') }}
+            State: {{ link.state | default('N/A') }}
+            Admin State: {{ link['admin-state'] | default('N/A') }}
+            Oper State: {{ link['oper-state'] | default('N/A') }}
+            Remote System IP: {{ link['remote-system-ip'] | default('N/A') }}
+            Remote Public IP: {{ link['remote-public-ip'] | default('N/A') }}
+            Remote Public Port: {{ link['remote-public-port'] | default('N/A') }}
+            Remote Color: {{ link['remote-color'] | default('N/A') }}
+            Protocol: {{ link.protocol | default('N/A') }}
+            Encapsulation: {{ link.encap | default('N/A') }}
+            Loss Percentage: {{ link['loss-percentage'] | default('N/A') }}
+            Latency: {{ link.latency | default('N/A') }}
+            Jitter: {{ link.jitter | default('N/A') }}
+            TX Bandwidth: {{ link['tx-bandwidth'] | default('N/A') }}
+            RX Bandwidth: {{ link['rx-bandwidth'] | default('N/A') }}
+            Quality: {{ link.quality | default('N/A') }}
+          
+          {% endfor %}
+          {% else %}
+          No BFD links data available.
+          {% endif %}
+          {% else %}
+          Error Details:
+          Status Code: {{ bfd_links.status | default('N/A') }}
+          Error Message: {{ bfd_links.msg | default('Unknown error') }}
+          {% endif %}
+        dest: "{{ bfd_dir }}/bfd_links.txt"
+
+    - name: Get device-specific BFD sessions for each device
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/bfd/sessions?deviceId={{ item['system-ip'] }}"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: device_bfd_sessions
+      failed_when: false
+      loop: "{{ devices_data }}"
+      when: devices_available and devices_data | length > 0
+
+    - name: Save device-specific BFD sessions to files
+      copy:
+        content: |
+          Device-Specific BFD Sessions - {{ ansible_date_time.iso8601 }}
+          ======================================================
+          vManage Host: {{ vmanage_host }}
+          Device Hostname: {{ item.item.hostname | default('N/A') }}
+          Device System IP: {{ item.item['system-ip'] | default('N/A') }}
+          Device Type: {{ item.item['device-type'] | default('N/A') }}
+          API Status: {{ 'Available' if (item.status is defined and item.status == 200) else 'Unavailable (HTTP ' + (item.status|string) + ')' }}
+          
+          {% if item.status is defined and item.status == 200 %}
+          Device BFD Sessions:
+          {% if item.json.data is defined %}
+          Total Sessions for Device: {{ item.json.data | length }}
+          
+          {% for session in item.json.data %}
+          Session {{ loop.index }}:
+          - Local Color: {{ session['local-color'] | default('N/A') }}
+            Remote Color: {{ session['remote-color'] | default('N/A') }}
+            Remote System IP: {{ session['remote-system-ip'] | default('N/A') }}
+            Source IP: {{ session['src-ip'] | default('N/A') }}
+            Destination IP: {{ session['dst-ip'] | default('N/A') }}
+            Source Port: {{ session['src-port'] | default('N/A') }}
+            Destination Port: {{ session['dst-port'] | default('N/A') }}
+            Protocol: {{ session.proto | default('N/A') }}
+            Detect Multiplier: {{ session['detect-multiplier'] | default('N/A') }}
+            TX Interval: {{ session['tx-interval'] | default('N/A') }}
+            RX Interval: {{ session['rx-interval'] | default('N/A') }}
+            State: {{ session.state | default('N/A') }}
+            Transitions: {{ session.transitions | default('N/A') }}
+            TX Packets: {{ session['tx-packets'] | default('N/A') }}
+            RX Packets: {{ session['rx-packets'] | default('N/A') }}
+            Uptime: {{ session.uptime | default('N/A') }}
+            Downtime: {{ session.downtime | default('N/A') }}
+            Last Failure Reason: {{ session['last-failure-reason'] | default('N/A') }}
+          
+          {% endfor %}
+          {% else %}
+          No BFD sessions data available for this device.
+          {% endif %}
+          {% else %}
+          Error Details:
+          Status Code: {{ item.status | default('N/A') }}
+          Error Message: {{ item.msg | default('Unknown error') }}
+          {% endif %}
+        dest: "{{ bfd_dir }}/device_bfd_sessions_{{ item.item.hostname | default('unknown') | regex_replace('[^A-Za-z0-9_-]', '_') }}.txt"
+      loop: "{{ device_bfd_sessions.results | default([]) }}"
+      when: devices_available
+
+    - name: Create execution summary
+      copy:
+        content: |
+          SD-WAN BFD Sessions Collection - Execution Summary
+          ================================================
+          Execution Time: {{ ansible_date_time.iso8601 }}
+          vManage Host: {{ vmanage_host }}
+          vManage Connectivity: {{ 'Connected' if vmanage_connected else 'Connection Failed - HTTP ' + (connectivity_status|string) }}
+          
+          API Endpoint Results:
+          - Devices List: {{ 'SUCCESS' if devices_available else 'FAILED - HTTP ' + (devices_list.status|string) }}
+          - BFD Sessions: {{ 'SUCCESS' if (bfd_sessions.status is defined and bfd_sessions.status == 200) else 'FAILED - HTTP ' + (bfd_sessions.status|string) }}
+          - BFD Summary: {{ 'SUCCESS' if (bfd_summary.status is defined and bfd_summary.status == 200) else 'FAILED - HTTP ' + (bfd_summary.status|string) }}
+          - BFD History: {{ 'SUCCESS' if (bfd_history.status is defined and bfd_history.status == 200) else 'FAILED - HTTP ' + (bfd_history.status|string) }}
+          - BFD Links: {{ 'SUCCESS' if (bfd_links.status is defined and bfd_links.status == 200) else 'FAILED - HTTP ' + (bfd_links.status|string) }}
+          - Device-Specific BFD Sessions: {{ (device_bfd_sessions.results | default([]) | length) if devices_available else 0 }} devices processed
+          
+          Total Devices Found: {{ devices_data | length if devices_available else 0 }}
+          Total BFD Sessions: {{ bfd_sessions.json.data | length if (bfd_sessions.status is defined and bfd_sessions.status == 200) else 'N/A' }}
+          
+          Files Created:
+          - devices_list.txt
+          - bfd_sessions.txt
+          - bfd_summary.txt
+          - bfd_history.txt
+          - bfd_links.txt
+          {% if devices_available %}
+          {% for device in devices_data %}
+          - device_bfd_sessions_{{ device.hostname | default('unknown') | regex_replace('[^A-Za-z0-9_-]', '_') }}.txt
+          {% endfor %}
+          {% endif %}
+          
+          Notes:
+          - All files saved to: {{ bfd_dir }}
+          - HTTP 403/503 errors are handled gracefully
+          - Available endpoints processed successfully
+          - Unavailable endpoints logged with error details
+          - BFD data reflects current session states and may change rapidly
+          - Session states: UP, DOWN, ADMIN_DOWN, INIT
+        dest: "{{ bfd_dir }}/execution_summary.txt"
