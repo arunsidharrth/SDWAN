@@ -1,16 +1,21 @@
 ---
-- name: Get Configuration Group Status
+- name: Get Configuration Group Status - Use Case 29
   hosts: localhost
-  gather_facts: yes
+  gather_facts: true
+  connection: local
   vars:
+    # Use environment variables for credentials
     vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
     vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
     vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
     vmanage_port: "443"
+    
+    # Directory structure
     generated_dir: "{{ playbook_dir }}/../generated"
+    config_group_dir: "{{ generated_dir }}/config_groups"
 
   tasks:
-    - name: Validate required environment variables
+    - name: Validate environment variables are set
       fail:
         msg: "Required environment variable {{ item }} is not set"
       when: vars[item] == ""
@@ -19,97 +24,225 @@
         - vmanage_username
         - vmanage_password
 
-    - name: Create generated directory
+    - name: Create generated directory structure
       file:
-        path: "{{ generated_dir }}/config_groups"
+        path: "{{ item }}"
         state: directory
         mode: '0755'
+      loop:
+        - "{{ generated_dir }}"
+        - "{{ config_group_dir }}"
 
     - name: Test vManage connectivity
       uri:
-        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/system/device/controllers"
+        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
         method: GET
         user: "{{ vmanage_username }}"
         password: "{{ vmanage_password }}"
         force_basic_auth: yes
-        validate_certs: no
+        validate_certs: false
         timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
       register: connectivity_test
-      ignore_errors: yes
+      failed_when: false
 
-    - name: Validate connectivity
+    - name: Fail if connectivity test failed
       fail:
-        msg: "Unable to connect to vManage at {{ vmanage_host }}:{{ vmanage_port }}. Status: {{ connectivity_test.status }}"
-      when: connectivity_test.status != 200
+        msg: "Cannot connect to vManage at {{ vmanage_host }}"
+      when: connectivity_test.status is not defined or connectivity_test.status != 200
 
-    - name: Try primary configuration group endpoint
+    - name: Get list of all configuration groups
       uri:
-        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/v1/config-group"
+        url: "https://{{ vmanage_host }}/dataservice/template/config-group"
         method: GET
         user: "{{ vmanage_username }}"
         password: "{{ vmanage_password }}"
         force_basic_auth: yes
-        validate_certs: no
+        validate_certs: false
         timeout: 60
         headers:
           Content-Type: "application/json"
-      register: config_group_result
-      ignore_errors: yes
+        status_code: [200, 403, 404, 500, 503]
+      register: config_groups_list
+      failed_when: false
 
-    - name: Try alternative configuration group endpoint if primary fails
-      uri:
-        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/configgroup"
-        method: GET
-        user: "{{ vmanage_username }}"
-        password: "{{ vmanage_password }}"
-        force_basic_auth: yes
-        validate_certs: no
-        timeout: 60
-        headers:
-          Content-Type: "application/json"
-      register: config_group_alt_result
-      ignore_errors: yes
-      when: config_group_result.status != 200
-
-    - name: Try device template groups endpoint if others fail
-      uri:
-        url: "https://{{ vmanage_host }}:{{ vmanage_port }}/dataservice/template/device"
-        method: GET
-        user: "{{ vmanage_username }}"
-        password: "{{ vmanage_password }}"
-        force_basic_auth: yes
-        validate_certs: no
-        timeout: 60
-        headers:
-          Content-Type: "application/json"
-      register: device_template_result
-      ignore_errors: yes
-      when: config_group_result.status != 200 and (config_group_alt_result is not defined or config_group_alt_result.status != 200)
-
-    - name: Set final result based on successful endpoint
+    - name: Handle configuration groups list API errors gracefully
       set_fact:
-        final_result: "{{ config_group_result if config_group_result.status == 200 else (config_group_alt_result if config_group_alt_result is defined and config_group_alt_result.status == 200 else device_template_result) }}"
+        config_groups_available: "{{ config_groups_list.status is defined and config_groups_list.status == 200 }}"
+        config_groups_data: "{{ config_groups_list.json.data if (config_groups_list.status is defined and config_groups_list.status == 200) else [] }}"
 
-    - name: Save configuration group status to file
-      copy:
-        content: "{{ final_result.json | to_nice_json }}"
-        dest: "{{ generated_dir }}/config_groups/config_group_status.json"
-      when: final_result is defined and final_result.json is defined
-
-    - name: Save endpoint information
+    - name: Save configuration groups list to file
       copy:
         content: |
-          Configuration Group Status Retrieved From:
-          Endpoint: {{ final_result.url if final_result is defined else 'No successful endpoint' }}
-          Status Code: {{ final_result.status if final_result is defined else 'N/A' }}
-          Timestamp: {{ ansible_date_time.iso8601 }}
+          Configuration Groups List - {{ ansible_date_time.iso8601 }}
+          =====================================================
+          vManage Host: {{ vmanage_host }}
+          API Status: {{ 'Available' if config_groups_available else 'Unavailable (HTTP ' + (config_groups_list.status|string) + ')' }}
           
-          Available Endpoints Tested:
-          1. /dataservice/v1/config-group
-          2. /dataservice/configgroup  
-          3. /dataservice/template/device
-        dest: "{{ generated_dir }}/config_groups/endpoint_info.txt"
+          {% if config_groups_available %}
+          Total Configuration Groups: {{ config_groups_data | length }}
+          
+          Configuration Groups:
+          {% for group in config_groups_data %}
+          - Name: {{ group.name | default('N/A') }}
+            ID: {{ group.id | default('N/A') }}
+            Description: {{ group.description | default('N/A') }}
+            Solution: {{ group.solution | default('N/A') }}
+            Profile Type: {{ group.profileType | default('N/A') }}
+            Created On: {{ group.createdOn | default('N/A') }}
+            Created By: {{ group.createdBy | default('N/A') }}
+            Last Updated On: {{ group.lastUpdatedOn | default('N/A') }}
+            Last Updated By: {{ group.lastUpdatedBy | default('N/A') }}
+          {% endfor %}
+          {% else %}
+          Error Details:
+          Status Code: {{ config_groups_list.status | default('N/A') }}
+          Error Message: {{ config_groups_list.msg | default('Unknown error') }}
+          {% endif %}
+        dest: "{{ config_group_dir }}/configuration_groups_list.txt"
 
-    - name: Show completion message
-      debug:
-        msg: "Configuration group status saved to {{ generated_dir }}/config_groups/config_group_status.json from endpoint: {{ final_result.url if final_result is defined and final_result.json is defined else 'No data retrieved - check endpoint_info.txt for details' }}"
+    - name: Get configuration group status for each group
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/config-group/{{ item.id }}/status"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: config_group_status
+      failed_when: false
+      loop: "{{ config_groups_data }}"
+      when: config_groups_available and config_groups_data | length > 0
+
+    - name: Process configuration group status results
+      set_fact:
+        config_group_status_results: "{{ config_group_status_results | default([]) + [item] }}"
+      loop: "{{ config_group_status.results | default([]) }}"
+      when: config_groups_available
+
+    - name: Save individual configuration group status to files
+      copy:
+        content: |
+          Configuration Group Status - {{ ansible_date_time.iso8601 }}
+          ========================================================
+          vManage Host: {{ vmanage_host }}
+          Group Name: {{ item.item.name | default('N/A') }}
+          Group ID: {{ item.item.id | default('N/A') }}
+          API Status: {{ 'Available' if (item.status is defined and item.status == 200) else 'Unavailable (HTTP ' + (item.status|string) + ')' }}
+          
+          {% if item.status is defined and item.status == 200 %}
+          Configuration Group Status Details:
+          {% if item.json.data is defined %}
+          {% for status_item in item.json.data %}
+          - Device ID: {{ status_item.deviceId | default('N/A') }}
+            Device IP: {{ status_item.deviceIP | default('N/A') }}
+            Hostname: {{ status_item.hostname | default('N/A') }}
+            Status: {{ status_item.status | default('N/A') }}
+            Activity: {{ status_item.activity | default('N/A') }}
+            Action Status: {{ status_item.actionStatus | default('N/A') }}
+            Config Group Name: {{ status_item.configGroupName | default('N/A') }}
+            Template Type: {{ status_item.templateType | default('N/A') }}
+            Start Time: {{ status_item.startTime | default('N/A') }}
+            End Time: {{ status_item.endTime | default('N/A') }}
+            Duration: {{ status_item.duration | default('N/A') }}
+          {% endfor %}
+          {% else %}
+          No status data available for this configuration group.
+          {% endif %}
+          {% else %}
+          Error Details:
+          Status Code: {{ item.status | default('N/A') }}
+          Error Message: {{ item.msg | default('Unknown error') }}
+          {% endif %}
+        dest: "{{ config_group_dir }}/config_group_status_{{ item.item.name | default('unknown') | regex_replace('[^A-Za-z0-9_-]', '_') }}.txt"
+      loop: "{{ config_group_status_results | default([]) }}"
+      when: config_groups_available
+
+    - name: Get configuration group deployment status
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/template/config-group/{{ item.id }}/deploy/status"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: config_group_deploy_status
+      failed_when: false
+      loop: "{{ config_groups_data }}"
+      when: config_groups_available and config_groups_data | length > 0
+
+    - name: Save configuration group deployment status
+      copy:
+        content: |
+          Configuration Group Deployment Status - {{ ansible_date_time.iso8601 }}
+          =================================================================
+          vManage Host: {{ vmanage_host }}
+          Group Name: {{ item.item.name | default('N/A') }}
+          Group ID: {{ item.item.id | default('N/A') }}
+          API Status: {{ 'Available' if (item.status is defined and item.status == 200) else 'Unavailable (HTTP ' + (item.status|string) + ')' }}
+          
+          {% if item.status is defined and item.status == 200 %}
+          Deployment Status Details:
+          {% if item.json.data is defined %}
+          {% for deploy_item in item.json.data %}
+          - Device ID: {{ deploy_item.deviceId | default('N/A') }}
+            Device IP: {{ deploy_item.deviceIP | default('N/A') }}
+            Hostname: {{ deploy_item.hostname | default('N/A') }}
+            Status: {{ deploy_item.status | default('N/A') }}
+            Activity: {{ deploy_item.activity | default('N/A') }}
+            Config Group: {{ deploy_item.configGroup | default('N/A') }}
+            Status ID: {{ deploy_item.statusId | default('N/A') }}
+            Current Activity: {{ deploy_item.currentActivity | default('N/A') }}
+            Validation: {{ deploy_item.validation | default('N/A') }}
+          {% endfor %}
+          {% else %}
+          No deployment status data available for this configuration group.
+          {% endif %}
+          {% else %}
+          Error Details:
+          Status Code: {{ item.status | default('N/A') }}
+          Error Message: {{ item.msg | default('Unknown error') }}
+          {% endif %}
+        dest: "{{ config_group_dir }}/config_group_deploy_status_{{ item.item.name | default('unknown') | regex_replace('[^A-Za-z0-9_-]', '_') }}.txt"
+      loop: "{{ config_group_deploy_status.results | default([]) }}"
+      when: config_groups_available
+
+    - name: Create execution summary
+      copy:
+        content: |
+          SD-WAN Configuration Group Status Check - Execution Summary
+          =========================================================
+          Execution Time: {{ ansible_date_time.iso8601 }}
+          vManage Host: {{ vmanage_host }}
+          
+          API Endpoint Results:
+          - Configuration Groups List: {{ 'SUCCESS' if config_groups_available else 'FAILED - HTTP ' + (config_groups_list.status|string) }}
+          - Total Groups Found: {{ config_groups_data | length if config_groups_available else 0 }}
+          - Individual Status Checks: {{ (config_group_status_results | default([]) | length) if config_groups_available else 0 }}
+          - Deployment Status Checks: {{ (config_group_deploy_status.results | default([]) | length) if config_groups_available else 0 }}
+          
+          Files Created:
+          - configuration_groups_list.txt
+          {% if config_groups_available %}
+          {% for group in config_groups_data %}
+          - config_group_status_{{ group.name | default('unknown') | regex_replace('[^A-Za-z0-9_-]', '_') }}.txt
+          - config_group_deploy_status_{{ group.name | default('unknown') | regex_replace('[^A-Za-z0-9_-]', '_') }}.txt
+          {% endfor %}
+          {% endif %}
+          
+          Notes:
+          - All files saved to: {{ config_group_dir }}
+          - HTTP 403/503 errors are handled gracefully
+          - Available endpoints processed successfully
+          - Unavailable endpoints logged with error details
+        dest: "{{ config_group_dir }}/execution_summary.txt"
