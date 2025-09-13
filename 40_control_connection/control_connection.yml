@@ -1,1 +1,523 @@
+---
+- name: Get Control Connections - Use Case 40
+  hosts: localhost
+  gather_facts: true
+  connection: local
+  vars:
+    # Use environment variables for credentials
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    
+    # Initialize status variables
+    vmanage_connected: false
+    connectivity_status: "Unknown"
+    
+    # Directory structure
+    generated_dir: "{{ playbook_dir }}/../generated"
+    control_dir: "{{ generated_dir }}/control_connections"
 
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+
+    - name: Create generated directory structure
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ generated_dir }}"
+        - "{{ control_dir }}"
+
+    - name: Test vManage connectivity
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: connectivity_test
+      failed_when: false
+
+    - name: Handle connectivity test results
+      set_fact:
+        vmanage_connected: "{{ connectivity_test.status is defined and connectivity_test.status == 200 }}"
+        connectivity_status: "{{ connectivity_test.status | default('Unknown') }}"
+      
+    - name: Display connectivity status
+      debug:
+        msg: |
+          vManage Connectivity: {{ 'SUCCESS' if vmanage_connected else 'FAILED - HTTP ' + (connectivity_status|string) }}
+          Continuing with available endpoints...
+
+    - name: Get list of all devices
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: devices_list
+      failed_when: false
+
+    - name: Handle devices list API errors gracefully
+      set_fact:
+        devices_available: "{{ devices_list.status is defined and devices_list.status == 200 }}"
+        devices_data: "{{ devices_list.json.data if (devices_list.status is defined and devices_list.status == 200) else [] }}"
+
+    - name: Get all control connections
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/control/connections"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: control_connections
+      failed_when: false
+
+    - name: Get control connections summary
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/control/summary"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: control_summary
+      failed_when: false
+
+    - name: Get control connection statistics
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/control/stats"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: control_stats
+      failed_when: false
+
+    - name: Get DTLS connections
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/control/connections/dtls"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: dtls_connections
+      failed_when: false
+
+    - name: Get TLS connections
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/control/connections/tls"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: tls_connections
+      failed_when: false
+
+    - name: Save devices list to file
+      copy:
+        content: |
+          Devices List for Control Connections - {{ ansible_date_time.iso8601 }}
+          =========================================================
+          vManage Host: {{ vmanage_host }}
+          vManage Connectivity: {{ 'Connected' if vmanage_connected else 'Connection Failed - HTTP ' + (connectivity_status|string) }}
+          API Status: {{ 'Available' if devices_available else 'Unavailable (HTTP ' + (devices_list.status|string) + ')' }}
+          
+          {% if devices_available %}
+          Total Devices: {{ devices_data | length }}
+          
+          Device Inventory:
+          {% for device in devices_data %}
+          - Hostname: {{ device.hostname | default('N/A') }}
+            System IP: {{ device['system-ip'] | default('N/A') }}
+            Device Type: {{ device['device-type'] | default('N/A') }}
+            Device Model: {{ device['device-model'] | default('N/A') }}
+            Version: {{ device.version | default('N/A') }}
+            Site ID: {{ device['site-id'] | default('N/A') }}
+            Status: {{ device.status | default('N/A') }}
+            Reachability: {{ device.reachability | default('N/A') }}
+            Local System IP: {{ device['local-system-ip'] | default('N/A') }}
+            Uptime: {{ device['uptime-date'] | default('N/A') }}
+          {% endfor %}
+          {% else %}
+          Error Details:
+          Status Code: {{ devices_list.status | default('N/A') }}
+          Error Message: {{ devices_list.msg | default('Unknown error') }}
+          {% endif %}
+        dest: "{{ control_dir }}/devices_list.txt"
+
+    - name: Save control connections to file
+      copy:
+        content: |
+          Control Connections - {{ ansible_date_time.iso8601 }}
+          ==========================================
+          vManage Host: {{ vmanage_host }}
+          API Status: {{ 'Available' if (control_connections.status is defined and control_connections.status == 200) else 'Unavailable (HTTP ' + (control_connections.status|string) + ')' }}
+          
+          {% if control_connections.status is defined and control_connections.status == 200 %}
+          Control Connections Data:
+          {% if control_connections.json.data is defined %}
+          Total Control Connections: {{ control_connections.json.data | length }}
+          
+          {% for connection in control_connections.json.data %}
+          Connection {{ loop.index }}:
+          - System IP: {{ connection['system-ip'] | default('N/A') }}
+            Hostname: {{ connection.hostname | default('N/A') }}
+            Site ID: {{ connection['site-id'] | default('N/A') }}
+            Device Type: {{ connection['device-type'] | default('N/A') }}
+            Peer Type: {{ connection['peer-type'] | default('N/A') }}
+            Peer System IP: {{ connection['peer-system-ip'] | default('N/A') }}
+            Protocol: {{ connection.protocol | default('N/A') }}
+            Local Color: {{ connection['local-color'] | default('N/A') }}
+            Remote Color: {{ connection['remote-color'] | default('N/A') }}
+            State: {{ connection.state | default('N/A') }}
+            Admin State: {{ connection['admin-state'] | default('N/A') }}
+            Uptime: {{ connection.uptime | default('N/A') }}
+            Domain ID: {{ connection['domain-id'] | default('N/A') }}
+            Site of Origin: {{ connection['site-of-origin'] | default('N/A') }}
+            Preference: {{ connection.preference | default('N/A') }}
+            Private IP: {{ connection['private-ip'] | default('N/A') }}
+            Private Port: {{ connection['private-port'] | default('N/A') }}
+            Public IP: {{ connection['public-ip'] | default('N/A') }}
+            Public Port: {{ connection['public-port'] | default('N/A') }}
+            Organization Name: {{ connection['organization-name'] | default('N/A') }}
+            Instance: {{ connection.instance | default('N/A') }}
+            Version: {{ connection.version | default('N/A') }}
+          
+          {% endfor %}
+          {% else %}
+          No control connections data available.
+          {% endif %}
+          {% else %}
+          Error Details:
+          Status Code: {{ control_connections.status | default('N/A') }}
+          Error Message: {{ control_connections.msg | default('Unknown error') }}
+          {% endif %}
+        dest: "{{ control_dir }}/control_connections.txt"
+
+    - name: Save control connections summary to file
+      copy:
+        content: |
+          Control Connections Summary - {{ ansible_date_time.iso8601 }}
+          ====================================================
+          vManage Host: {{ vmanage_host }}
+          API Status: {{ 'Available' if (control_summary.status is defined and control_summary.status == 200) else 'Unavailable (HTTP ' + (control_summary.status|string) + ')' }}
+          
+          {% if control_summary.status is defined and control_summary.status == 200 %}
+          Control Summary Data:
+          {% if control_summary.json.data is defined %}
+          {% for summary_item in control_summary.json.data %}
+          - System IP: {{ summary_item['system-ip'] | default('N/A') }}
+            Hostname: {{ summary_item.hostname | default('N/A') }}
+            Site ID: {{ summary_item['site-id'] | default('N/A') }}
+            Device Type: {{ summary_item['device-type'] | default('N/A') }}
+            Personality: {{ summary_item.personality | default('N/A') }}
+            Connections Up: {{ summary_item['connections-up'] | default('N/A') }}
+            Connections Down: {{ summary_item['connections-down'] | default('N/A') }}
+            Admin State: {{ summary_item['admin-state'] | default('N/A') }}
+            Oper State: {{ summary_item['oper-state'] | default('N/A') }}
+            Domain ID: {{ summary_item['domain-id'] | default('N/A') }}
+            Site of Origin: {{ summary_item['site-of-origin'] | default('N/A') }}
+            Organization Name: {{ summary_item['organization-name'] | default('N/A') }}
+            Version: {{ summary_item.version | default('N/A') }}
+            Last Updated: {{ summary_item['lastupdated'] | default('N/A') }}
+          
+          {% endfor %}
+          {% else %}
+          No control summary data available.
+          {% endif %}
+          {% else %}
+          Error Details:
+          Status Code: {{ control_summary.status | default('N/A') }}
+          Error Message: {{ control_summary.msg | default('Unknown error') }}
+          {% endif %}
+        dest: "{{ control_dir }}/control_summary.txt"
+
+    - name: Save control connection statistics to file
+      copy:
+        content: |
+          Control Connection Statistics - {{ ansible_date_time.iso8601 }}
+          ===================================================
+          vManage Host: {{ vmanage_host }}
+          API Status: {{ 'Available' if (control_stats.status is defined and control_stats.status == 200) else 'Unavailable (HTTP ' + (control_stats.status|string) + ')' }}
+          
+          {% if control_stats.status is defined and control_stats.status == 200 %}
+          Control Statistics Data:
+          {% if control_stats.json.data is defined %}
+          Total Statistics Records: {{ control_stats.json.data | length }}
+          
+          {% for stat in control_stats.json.data %}
+          Statistics {{ loop.index }}:
+          - System IP: {{ stat['system-ip'] | default('N/A') }}
+            Hostname: {{ stat.hostname | default('N/A') }}
+            Site ID: {{ stat['site-id'] | default('N/A') }}
+            Peer System IP: {{ stat['peer-system-ip'] | default('N/A') }}
+            Protocol: {{ stat.protocol | default('N/A') }}
+            Local Color: {{ stat['local-color'] | default('N/A') }}
+            Remote Color: {{ stat['remote-color'] | default('N/A') }}
+            Packets Sent: {{ stat['packets-sent'] | default('N/A') }}
+            Packets Received: {{ stat['packets-received'] | default('N/A') }}
+            Bytes Sent: {{ stat['bytes-sent'] | default('N/A') }}
+            Bytes Received: {{ stat['bytes-received'] | default('N/A') }}
+            Hello Sent: {{ stat['hello-sent'] | default('N/A') }}
+            Hello Received: {{ stat['hello-received'] | default('N/A') }}
+            Handshake Sent: {{ stat['handshake-sent'] | default('N/A') }}
+            Handshake Received: {{ stat['handshake-received'] | default('N/A') }}
+            Alert Sent: {{ stat['alert-sent'] | default('N/A') }}
+            Alert Received: {{ stat['alert-received'] | default('N/A') }}
+            Error Count: {{ stat['error-count'] | default('N/A') }}
+            Last Error: {{ stat['last-error'] | default('N/A') }}
+          
+          {% endfor %}
+          {% else %}
+          No control statistics data available.
+          {% endif %}
+          {% else %}
+          Error Details:
+          Status Code: {{ control_stats.status | default('N/A') }}
+          Error Message: {{ control_stats.msg | default('Unknown error') }}
+          {% endif %}
+        dest: "{{ control_dir }}/control_statistics.txt"
+
+    - name: Save DTLS connections to file
+      copy:
+        content: |
+          DTLS Control Connections - {{ ansible_date_time.iso8601 }}
+          =============================================
+          vManage Host: {{ vmanage_host }}
+          API Status: {{ 'Available' if (dtls_connections.status is defined and dtls_connections.status == 200) else 'Unavailable (HTTP ' + (dtls_connections.status|string) + ')' }}
+          
+          {% if dtls_connections.status is defined and dtls_connections.status == 200 %}
+          DTLS Connections Data:
+          {% if dtls_connections.json.data is defined %}
+          Total DTLS Connections: {{ dtls_connections.json.data | length }}
+          
+          {% for dtls_conn in dtls_connections.json.data %}
+          DTLS Connection {{ loop.index }}:
+          - System IP: {{ dtls_conn['system-ip'] | default('N/A') }}
+            Hostname: {{ dtls_conn.hostname | default('N/A') }}
+            Site ID: {{ dtls_conn['site-id'] | default('N/A') }}
+            Peer System IP: {{ dtls_conn['peer-system-ip'] | default('N/A') }}
+            Local IP: {{ dtls_conn['local-ip'] | default('N/A') }}
+            Local Port: {{ dtls_conn['local-port'] | default('N/A') }}
+            Remote IP: {{ dtls_conn['remote-ip'] | default('N/A') }}
+            Remote Port: {{ dtls_conn['remote-port'] | default('N/A') }}
+            State: {{ dtls_conn.state | default('N/A') }}
+            Uptime: {{ dtls_conn.uptime | default('N/A') }}
+            Index: {{ dtls_conn.index | default('N/A') }}
+            Source Interface: {{ dtls_conn['source-interface'] | default('N/A') }}
+            Destination Interface: {{ dtls_conn['destination-interface'] | default('N/A') }}
+            Protocol Version: {{ dtls_conn['protocol-version'] | default('N/A') }}
+            Cipher Suite: {{ dtls_conn['cipher-suite'] | default('N/A') }}
+            Maximum Segment Size: {{ dtls_conn['max-segment-size'] | default('N/A') }}
+            TX Queue Size: {{ dtls_conn['tx-queue-size'] | default('N/A') }}
+            RX Queue Size: {{ dtls_conn['rx-queue-size'] | default('N/A') }}
+          
+          {% endfor %}
+          {% else %}
+          No DTLS connections data available.
+          {% endif %}
+          {% else %}
+          Error Details:
+          Status Code: {{ dtls_connections.status | default('N/A') }}
+          Error Message: {{ dtls_connections.msg | default('Unknown error') }}
+          {% endif %}
+        dest: "{{ control_dir }}/dtls_connections.txt"
+
+    - name: Save TLS connections to file
+      copy:
+        content: |
+          TLS Control Connections - {{ ansible_date_time.iso8601 }}
+          ============================================
+          vManage Host: {{ vmanage_host }}
+          API Status: {{ 'Available' if (tls_connections.status is defined and tls_connections.status == 200) else 'Unavailable (HTTP ' + (tls_connections.status|string) + ')' }}
+          
+          {% if tls_connections.status is defined and tls_connections.status == 200 %}
+          TLS Connections Data:
+          {% if tls_connections.json.data is defined %}
+          Total TLS Connections: {{ tls_connections.json.data | length }}
+          
+          {% for tls_conn in tls_connections.json.data %}
+          TLS Connection {{ loop.index }}:
+          - System IP: {{ tls_conn['system-ip'] | default('N/A') }}
+            Hostname: {{ tls_conn.hostname | default('N/A') }}
+            Site ID: {{ tls_conn['site-id'] | default('N/A') }}
+            Peer System IP: {{ tls_conn['peer-system-ip'] | default('N/A') }}
+            Local IP: {{ tls_conn['local-ip'] | default('N/A') }}
+            Local Port: {{ tls_conn['local-port'] | default('N/A') }}
+            Remote IP: {{ tls_conn['remote-ip'] | default('N/A') }}
+            Remote Port: {{ tls_conn['remote-port'] | default('N/A') }}
+            State: {{ tls_conn.state | default('N/A') }}
+            Uptime: {{ tls_conn.uptime | default('N/A') }}
+            Index: {{ tls_conn.index | default('N/A') }}
+            Source Interface: {{ tls_conn['source-interface'] | default('N/A') }}
+            Destination Interface: {{ tls_conn['destination-interface'] | default('N/A') }}
+            Protocol Version: {{ tls_conn['protocol-version'] | default('N/A') }}
+            Cipher Suite: {{ tls_conn['cipher-suite'] | default('N/A') }}
+            Certificate Serial Number: {{ tls_conn['cert-serial-number'] | default('N/A') }}
+            Session Reused: {{ tls_conn['session-reused'] | default('N/A') }}
+          
+          {% endfor %}
+          {% else %}
+          No TLS connections data available.
+          {% endif %}
+          {% else %}
+          Error Details:
+          Status Code: {{ tls_connections.status | default('N/A') }}
+          Error Message: {{ tls_connections.msg | default('Unknown error') }}
+          {% endif %}
+        dest: "{{ control_dir }}/tls_connections.txt"
+
+    - name: Get device-specific control connections for each device
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/control/connections?deviceId={{ item['system-ip'] }}"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: device_control_connections
+      failed_when: false
+      loop: "{{ devices_data }}"
+      when: devices_available and devices_data | length > 0
+
+    - name: Save device-specific control connections to files
+      copy:
+        content: |
+          Device-Specific Control Connections - {{ ansible_date_time.iso8601 }}
+          ============================================================
+          vManage Host: {{ vmanage_host }}
+          Device Hostname: {{ item.item.hostname | default('N/A') }}
+          Device System IP: {{ item.item['system-ip'] | default('N/A') }}
+          Device Type: {{ item.item['device-type'] | default('N/A') }}
+          API Status: {{ 'Available' if (item.status is defined and item.status == 200) else 'Unavailable (HTTP ' + (item.status|string) + ')' }}
+          
+          {% if item.status is defined and item.status == 200 %}
+          Device Control Connections:
+          {% if item.json.data is defined %}
+          Total Connections for Device: {{ item.json.data | length }}
+          
+          {% for connection in item.json.data %}
+          Connection {{ loop.index }}:
+          - Peer Type: {{ connection['peer-type'] | default('N/A') }}
+            Peer System IP: {{ connection['peer-system-ip'] | default('N/A') }}
+            Protocol: {{ connection.protocol | default('N/A') }}
+            Local Color: {{ connection['local-color'] | default('N/A') }}
+            Remote Color: {{ connection['remote-color'] | default('N/A') }}
+            State: {{ connection.state | default('N/A') }}
+            Admin State: {{ connection['admin-state'] | default('N/A') }}
+            Uptime: {{ connection.uptime | default('N/A') }}
+            Domain ID: {{ connection['domain-id'] | default('N/A') }}
+            Site of Origin: {{ connection['site-of-origin'] | default('N/A') }}
+            Preference: {{ connection.preference | default('N/A') }}
+            Private IP: {{ connection['private-ip'] | default('N/A') }}
+            Private Port: {{ connection['private-port'] | default('N/A') }}
+            Public IP: {{ connection['public-ip'] | default('N/A') }}
+            Public Port: {{ connection['public-port'] | default('N/A') }}
+            Organization Name: {{ connection['organization-name'] | default('N/A') }}
+            Instance: {{ connection.instance | default('N/A') }}
+            Version: {{ connection.version | default('N/A') }}
+          
+          {% endfor %}
+          {% else %}
+          No control connections data available for this device.
+          {% endif %}
+          {% else %}
+          Error Details:
+          Status Code: {{ item.status | default('N/A') }}
+          Error Message: {{ item.msg | default('Unknown error') }}
+          {% endif %}
+        dest: "{{ control_dir }}/device_control_connections_{{ item.item.hostname | default('unknown') | regex_replace('[^A-Za-z0-9_-]', '_') }}.txt"
+      loop: "{{ device_control_connections.results | default([]) }}"
+      when: devices_available
+
+    - name: Create execution summary
+      copy:
+        content: |
+          SD-WAN Control Connections Collection - Execution Summary
+          ========================================================
+          Execution Time: {{ ansible_date_time.iso8601 }}
+          vManage Host: {{ vmanage_host }}
+          vManage Connectivity: {{ 'Connected' if vmanage_connected else 'Connection Failed - HTTP ' + (connectivity_status|string) }}
+          
+          API Endpoint Results:
+          - Devices List: {{ 'SUCCESS' if devices_available else 'FAILED - HTTP ' + (devices_list.status|string) }}
+          - Control Connections: {{ 'SUCCESS' if (control_connections.status is defined and control_connections.status == 200) else 'FAILED - HTTP ' + (control_connections.status|string) }}
+          - Control Summary: {{ 'SUCCESS' if (control_summary.status is defined and control_summary.status == 200) else 'FAILED - HTTP ' + (control_summary.status|string) }}
+          - Control Statistics: {{ 'SUCCESS' if (control_stats.status is defined and control_stats.status == 200) else 'FAILED - HTTP ' + (control_stats.status|string) }}
+          - DTLS Connections: {{ 'SUCCESS' if (dtls_connections.status is defined and dtls_connections.status == 200) else 'FAILED - HTTP ' + (dtls_connections.status|string) }}
+          - TLS Connections: {{ 'SUCCESS' if (tls_connections.status is defined and tls_connections.status == 200) else 'FAILED - HTTP ' + (tls_connections.status|string) }}
+          - Device-Specific Control Connections: {{ (device_control_connections.results | default([]) | length) if devices_available else 0 }} devices processed
+          
+          Total Devices Found: {{ devices_data | length if devices_available else 0 }}
+          Total Control Connections: {{ control_connections.json.data | length if (control_connections.status is defined and control_connections.status == 200) else 'N/A' }}
+          Total DTLS Connections: {{ dtls_connections.json.data | length if (dtls_connections.status is defined and dtls_connections.status == 200) else 'N/A' }}
+          Total TLS Connections: {{ tls_connections.json.data | length if (tls_connections.status is defined and tls_connections.status == 200) else 'N/A' }}
+          
+          Files Created:
+          - devices_list.txt
+          - control_connections.txt
+          - control_summary.txt
+          - control_statistics.txt
+          - dtls_connections.txt
+          - tls_connections.txt
+          {% if devices_available %}
+          {% for device in devices_data %}
+          - device_control_connections_{{ device.hostname | default('unknown') | regex_replace('[^A-Za-z0-9_-]', '_') }}.txt
+          {% endfor %}
+          {% endif %}
+          
+          Directory Structure:
+          - Base Directory: {{ generated_dir }}
+          - Control Connections Directory: {{ control_dir }}
+          
+          Playbook Execution: COMPLETED
+        dest: "{{ control_dir }}/execution_summary.txt"
