@@ -1,1 +1,559 @@
+---
+- name: Get OMP Peers - Use Case 39
+  hosts: localhost
+  gather_facts: true
+  connection: local
+  vars:
+    # Use environment variables for credentials
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    
+    # Initialize status variables
+    vmanage_connected: false
+    connectivity_status: "Unknown"
+    
+    # Directory structure
+    generated_dir: "{{ playbook_dir }}/../generated"
+    omp_dir: "{{ generated_dir }}/omp_peers"
 
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+
+    - name: Create generated directory structure
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ generated_dir }}"
+        - "{{ omp_dir }}"
+
+    - name: Test vManage connectivity
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: connectivity_test
+      failed_when: false
+
+    - name: Handle connectivity test results
+      set_fact:
+        vmanage_connected: "{{ connectivity_test.status is defined and connectivity_test.status == 200 }}"
+        connectivity_status: "{{ connectivity_test.status | default('Unknown') }}"
+      
+    - name: Display connectivity status
+      debug:
+        msg: |
+          vManage Connectivity: {{ 'SUCCESS' if vmanage_connected else 'FAILED - HTTP ' + (connectivity_status|string) }}
+          Continuing with available endpoints...
+
+    - name: Get list of all devices
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: devices_list
+      failed_when: false
+
+    - name: Handle devices list API errors gracefully
+      set_fact:
+        devices_available: "{{ devices_list.status is defined and devices_list.status == 200 }}"
+        devices_data: "{{ devices_list.json.data if (devices_list.status is defined and devices_list.status == 200) else [] }}"
+
+    - name: Get all OMP peers
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/omp/peers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: omp_peers
+      failed_when: false
+
+    - name: Get OMP summary statistics
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/omp/summary"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: omp_summary
+      failed_when: false
+
+    - name: Get OMP routes
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/omp/routes"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: omp_routes
+      failed_when: false
+
+    - name: Get OMP advertised routes
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/omp/advertised-routes"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: omp_advertised_routes
+      failed_when: false
+
+    - name: Get OMP received routes
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/omp/received-routes"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: omp_received_routes
+      failed_when: false
+
+    - name: Save devices list to file
+      copy:
+        content: |
+          Devices List for OMP Peers - {{ ansible_date_time.iso8601 }}
+          ===================================================
+          vManage Host: {{ vmanage_host }}
+          vManage Connectivity: {{ 'Connected' if vmanage_connected else 'Connection Failed - HTTP ' + (connectivity_status|string) }}
+          API Status: {{ 'Available' if devices_available else 'Unavailable (HTTP ' + (devices_list.status|string) + ')' }}
+          
+          {% if devices_available %}
+          Total Devices: {{ devices_data | length }}
+          
+          Device Inventory:
+          {% for device in devices_data %}
+          - Hostname: {{ device.hostname | default('N/A') }}
+            System IP: {{ device['system-ip'] | default('N/A') }}
+            Device Type: {{ device['device-type'] | default('N/A') }}
+            Device Model: {{ device['device-model'] | default('N/A') }}
+            Version: {{ device.version | default('N/A') }}
+            Site ID: {{ device['site-id'] | default('N/A') }}
+            Status: {{ device.status | default('N/A') }}
+            Reachability: {{ device.reachability | default('N/A') }}
+            Local System IP: {{ device['local-system-ip'] | default('N/A') }}
+            Uptime: {{ device['uptime-date'] | default('N/A') }}
+          {% endfor %}
+          {% else %}
+          Error Details:
+          Status Code: {{ devices_list.status | default('N/A') }}
+          Error Message: {{ devices_list.msg | default('Unknown error') }}
+          {% endif %}
+        dest: "{{ omp_dir }}/devices_list.txt"
+
+    - name: Save OMP peers to file
+      copy:
+        content: |
+          OMP Peers - {{ ansible_date_time.iso8601 }}
+          ===================================
+          vManage Host: {{ vmanage_host }}
+          API Status: {{ 'Available' if (omp_peers.status is defined and omp_peers.status == 200) else 'Unavailable (HTTP ' + (omp_peers.status|string) + ')' }}
+          
+          {% if omp_peers.status is defined and omp_peers.status == 200 %}
+          OMP Peers Data:
+          {% if omp_peers.json.data is defined %}
+          Total Peers: {{ omp_peers.json.data | length }}
+          
+          {% for peer in omp_peers.json.data %}
+          Peer {{ loop.index }}:
+          - System IP: {{ peer['system-ip'] | default('N/A') }}
+            Hostname: {{ peer.hostname | default('N/A') }}
+            Site ID: {{ peer['site-id'] | default('N/A') }}
+            Peer Type: {{ peer['peer-type'] | default('N/A') }}
+            Peer System IP: {{ peer['peer'] | default('N/A') }}
+            Domain ID: {{ peer['domain-id'] | default('N/A') }}
+            Overlay ID: {{ peer['overlay-id'] | default('N/A') }}
+            State: {{ peer.state | default('N/A') }}
+            Admin State: {{ peer['admin-state'] | default('N/A') }}
+            Legit: {{ peer.legit | default('N/A') }}
+            Refresh: {{ peer.refresh | default('N/A') }}
+            Site of Origin: {{ peer['site-of-origin'] | default('N/A') }}
+            Region ID: {{ peer['region-id'] | default('N/A') }}
+            Role: {{ peer.role | default('N/A') }}
+            Up Time: {{ peer['up-time'] | default('N/A') }}
+            Hello Sent: {{ peer['hello-sent'] | default('N/A') }}
+            Hello Received: {{ peer['hello-received'] | default('N/A') }}
+            Handshake Sent: {{ peer['handshake-sent'] | default('N/A') }}
+            Handshake Received: {{ peer['handshake-received'] | default('N/A') }}
+            Alert Sent: {{ peer['alert-sent'] | default('N/A') }}
+            Alert Received: {{ peer['alert-received'] | default('N/A') }}
+            Inform Sent: {{ peer['inform-sent'] | default('N/A') }}
+            Inform Received: {{ peer['inform-received'] | default('N/A') }}
+            Update Sent: {{ peer['update-sent'] | default('N/A') }}
+            Update Received: {{ peer['update-received'] | default('N/A') }}
+            Route Refresh Sent: {{ peer['route-refresh-sent'] | default('N/A') }}
+            Route Refresh Received: {{ peer['route-refresh-received'] | default('N/A') }}
+            Keepalive Sent: {{ peer['keepalive-sent'] | default('N/A') }}
+            Keepalive Received: {{ peer['keepalive-received'] | default('N/A') }}
+          
+          {% endfor %}
+          {% else %}
+          No OMP peers data available.
+          {% endif %}
+          {% else %}
+          Error Details:
+          Status Code: {{ omp_peers.status | default('N/A') }}
+          Error Message: {{ omp_peers.msg | default('Unknown error') }}
+          {% endif %}
+        dest: "{{ omp_dir }}/omp_peers.txt"
+
+    - name: Save OMP summary to file
+      copy:
+        content: |
+          OMP Summary Statistics - {{ ansible_date_time.iso8601 }}
+          ============================================
+          vManage Host: {{ vmanage_host }}
+          API Status: {{ 'Available' if (omp_summary.status is defined and omp_summary.status == 200) else 'Unavailable (HTTP ' + (omp_summary.status|string) + ')' }}
+          
+          {% if omp_summary.status is defined and omp_summary.status == 200 %}
+          OMP Summary Data:
+          {% if omp_summary.json.data is defined %}
+          {% for summary_item in omp_summary.json.data %}
+          - System IP: {{ summary_item['system-ip'] | default('N/A') }}
+            Hostname: {{ summary_item.hostname | default('N/A') }}
+            Site ID: {{ summary_item['site-id'] | default('N/A') }}
+            Admin State: {{ summary_item['admin-state'] | default('N/A') }}
+            Oper State: {{ summary_item['oper-state'] | default('N/A') }}
+            Personality: {{ summary_item.personality | default('N/A') }}
+            Domain ID: {{ summary_item['domain-id'] | default('N/A') }}
+            Overlay ID: {{ summary_item['overlay-id'] | default('N/A') }}
+            Site of Origin: {{ summary_item['site-of-origin'] | default('N/A') }}
+            Region ID: {{ summary_item['region-id'] | default('N/A') }}
+            Role: {{ summary_item.role | default('N/A') }}
+            Peers Up: {{ summary_item['peers-up'] | default('N/A') }}
+            Peers Down: {{ summary_item['peers-down'] | default('N/A') }}
+            Routes Advertised: {{ summary_item['routes-advertised'] | default('N/A') }}
+            Routes Received: {{ summary_item['routes-received'] | default('N/A') }}
+            Routes Installed: {{ summary_item['routes-installed'] | default('N/A') }}
+            TLOCS Advertised: {{ summary_item['tlocs-advertised'] | default('N/A') }}
+            TLOCS Received: {{ summary_item['tlocs-received'] | default('N/A') }}
+            TLOCS Installed: {{ summary_item['tlocs-installed'] | default('N/A') }}
+            Services Advertised: {{ summary_item['services-advertised'] | default('N/A') }}
+            Services Received: {{ summary_item['services-received'] | default('N/A') }}
+            Services Installed: {{ summary_item['services-installed'] | default('N/A') }}
+            Multicast Routes Advertised: {{ summary_item['mcast-routes-advertised'] | default('N/A') }}
+            Multicast Routes Received: {{ summary_item['mcast-routes-received'] | default('N/A') }}
+            Multicast Routes Installed: {{ summary_item['mcast-routes-installed'] | default('N/A') }}
+            Last Updated: {{ summary_item['lastupdated'] | default('N/A') }}
+          
+          {% endfor %}
+          {% else %}
+          No OMP summary data available.
+          {% endif %}
+          {% else %}
+          Error Details:
+          Status Code: {{ omp_summary.status | default('N/A') }}
+          Error Message: {{ omp_summary.msg | default('Unknown error') }}
+          {% endif %}
+        dest: "{{ omp_dir }}/omp_summary.txt"
+
+    - name: Save OMP routes to file
+      copy:
+        content: |
+          OMP Routes - {{ ansible_date_time.iso8601 }}
+          ================================
+          vManage Host: {{ vmanage_host }}
+          API Status: {{ 'Available' if (omp_routes.status is defined and omp_routes.status == 200) else 'Unavailable (HTTP ' + (omp_routes.status|string) + ')' }}
+          
+          {% if omp_routes.status is defined and omp_routes.status == 200 %}
+          OMP Routes Data:
+          {% if omp_routes.json.data is defined %}
+          Total Routes: {{ omp_routes.json.data | length }}
+          
+          {% for route in omp_routes.json.data %}
+          Route {{ loop.index }}:
+          - System IP: {{ route['system-ip'] | default('N/A') }}
+            Hostname: {{ route.hostname | default('N/A') }}
+            Site ID: {{ route['site-id'] | default('N/A') }}
+            VPN ID: {{ route['vpn-id'] | default('N/A') }}
+            Prefix: {{ route.prefix | default('N/A') }}
+            Path ID: {{ route['path-id'] | default('N/A') }}
+            Label: {{ route.label | default('N/A') }}
+            Status: {{ route.status | default('N/A') }}
+            Origin: {{ route.origin | default('N/A') }}
+            Originator: {{ route.originator | default('N/A') }}
+            Attribute: {{ route.attribute | default('N/A') }}
+            Path Preference: {{ route['path-preference'] | default('N/A') }}
+            TLOC: {{ route.tloc | default('N/A') }}
+            TLOC IP: {{ route['tloc-ip'] | default('N/A') }}
+            Color: {{ route.color | default('N/A') }}
+            Encap: {{ route.encap | default('N/A') }}
+            Preference: {{ route.preference | default('N/A') }}
+            Tag: {{ route.tag | default('N/A') }}
+            Site of Origin: {{ route['site-of-origin'] | default('N/A') }}
+            Domain ID: {{ route['domain-id'] | default('N/A') }}
+            Overlay ID: {{ route['overlay-id'] | default('N/A') }}
+          
+          {% endfor %}
+          {% else %}
+          No OMP routes data available.
+          {% endif %}
+          {% else %}
+          Error Details:
+          Status Code: {{ omp_routes.status | default('N/A') }}
+          Error Message: {{ omp_routes.msg | default('Unknown error') }}
+          {% endif %}
+        dest: "{{ omp_dir }}/omp_routes.txt"
+
+    - name: Save OMP advertised routes to file
+      copy:
+        content: |
+          OMP Advertised Routes - {{ ansible_date_time.iso8601 }}
+          ==========================================
+          vManage Host: {{ vmanage_host }}
+          API Status: {{ 'Available' if (omp_advertised_routes.status is defined and omp_advertised_routes.status == 200) else 'Unavailable (HTTP ' + (omp_advertised_routes.status|string) + ')' }}
+          
+          {% if omp_advertised_routes.status is defined and omp_advertised_routes.status == 200 %}
+          OMP Advertised Routes Data:
+          {% if omp_advertised_routes.json.data is defined %}
+          Total Advertised Routes: {{ omp_advertised_routes.json.data | length }}
+          
+          {% for adv_route in omp_advertised_routes.json.data %}
+          Advertised Route {{ loop.index }}:
+          - System IP: {{ adv_route['system-ip'] | default('N/A') }}
+            Hostname: {{ adv_route.hostname | default('N/A') }}
+            Site ID: {{ adv_route['site-id'] | default('N/A') }}
+            VPN ID: {{ adv_route['vpn-id'] | default('N/A') }}
+            Prefix: {{ adv_route.prefix | default('N/A') }}
+            Path ID: {{ adv_route['path-id'] | default('N/A') }}
+            Label: {{ adv_route.label | default('N/A') }}
+            To Peer: {{ adv_route['to-peer'] | default('N/A') }}
+            From Peer: {{ adv_route['from-peer'] | default('N/A') }}
+            Origin: {{ adv_route.origin | default('N/A') }}
+            Originator: {{ adv_route.originator | default('N/A') }}
+            Attribute: {{ adv_route.attribute | default('N/A') }}
+            Path Preference: {{ adv_route['path-preference'] | default('N/A') }}
+            TLOC: {{ adv_route.tloc | default('N/A') }}
+            TLOC IP: {{ adv_route['tloc-ip'] | default('N/A') }}
+            Color: {{ adv_route.color | default('N/A') }}
+            Encap: {{ adv_route.encap | default('N/A') }}
+            Preference: {{ adv_route.preference | default('N/A') }}
+            Tag: {{ adv_route.tag | default('N/A') }}
+            Domain ID: {{ adv_route['domain-id'] | default('N/A') }}
+            Overlay ID: {{ adv_route['overlay-id'] | default('N/A') }}
+          
+          {% endfor %}
+          {% else %}
+          No OMP advertised routes data available.
+          {% endif %}
+          {% else %}
+          Error Details:
+          Status Code: {{ omp_advertised_routes.status | default('N/A') }}
+          Error Message: {{ omp_advertised_routes.msg | default('Unknown error') }}
+          {% endif %}
+        dest: "{{ omp_dir }}/omp_advertised_routes.txt"
+
+    - name: Save OMP received routes to file
+      copy:
+        content: |
+          OMP Received Routes - {{ ansible_date_time.iso8601 }}
+          ======================================
+          vManage Host: {{ vmanage_host }}
+          API Status: {{ 'Available' if (omp_received_routes.status is defined and omp_received_routes.status == 200) else 'Unavailable (HTTP ' + (omp_received_routes.status|string) + ')' }}
+          
+          {% if omp_received_routes.status is defined and omp_received_routes.status == 200 %}
+          OMP Received Routes Data:
+          {% if omp_received_routes.json.data is defined %}
+          Total Received Routes: {{ omp_received_routes.json.data | length }}
+          
+          {% for recv_route in omp_received_routes.json.data %}
+          Received Route {{ loop.index }}:
+          - System IP: {{ recv_route['system-ip'] | default('N/A') }}
+            Hostname: {{ recv_route.hostname | default('N/A') }}
+            Site ID: {{ recv_route['site-id'] | default('N/A') }}
+            VPN ID: {{ recv_route['vpn-id'] | default('N/A') }}
+            Prefix: {{ recv_route.prefix | default('N/A') }}
+            Path ID: {{ recv_route['path-id'] | default('N/A') }}
+            Label: {{ recv_route.label | default('N/A') }}
+            To Peer: {{ recv_route['to-peer'] | default('N/A') }}
+            From Peer: {{ recv_route['from-peer'] | default('N/A') }}
+            Origin: {{ recv_route.origin | default('N/A') }}
+            Originator: {{ recv_route.originator | default('N/A') }}
+            Attribute: {{ recv_route.attribute | default('N/A') }}
+            Path Preference: {{ recv_route['path-preference'] | default('N/A') }}
+            TLOC: {{ recv_route.tloc | default('N/A') }}
+            TLOC IP: {{ recv_route['tloc-ip'] | default('N/A') }}
+            Color: {{ recv_route.color | default('N/A') }}
+            Encap: {{ recv_route.encap | default('N/A') }}
+            Preference: {{ recv_route.preference | default('N/A') }}
+            Tag: {{ recv_route.tag | default('N/A') }}
+            Status: {{ recv_route.status | default('N/A') }}
+            Domain ID: {{ recv_route['domain-id'] | default('N/A') }}
+            Overlay ID: {{ recv_route['overlay-id'] | default('N/A') }}
+          
+          {% endfor %}
+          {% else %}
+          No OMP received routes data available.
+          {% endif %}
+          {% else %}
+          Error Details:
+          Status Code: {{ omp_received_routes.status | default('N/A') }}
+          Error Message: {{ omp_received_routes.msg | default('Unknown error') }}
+          {% endif %}
+        dest: "{{ omp_dir }}/omp_received_routes.txt"
+
+    - name: Get device-specific OMP peers for each device
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/omp/peers?deviceId={{ item['system-ip'] }}"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+        status_code: [200, 403, 404, 500, 503]
+      register: device_omp_peers
+      failed_when: false
+      loop: "{{ devices_data }}"
+      when: devices_available and devices_data | length > 0
+
+    - name: Save device-specific OMP peers to files
+      copy:
+        content: |
+          Device-Specific OMP Peers - {{ ansible_date_time.iso8601 }}
+          ==================================================
+          vManage Host: {{ vmanage_host }}
+          Device Hostname: {{ item.item.hostname | default('N/A') }}
+          Device System IP: {{ item.item['system-ip'] | default('N/A') }}
+          Device Type: {{ item.item['device-type'] | default('N/A') }}
+          API Status: {{ 'Available' if (item.status is defined and item.status == 200) else 'Unavailable (HTTP ' + (item.status|string) + ')' }}
+          
+          {% if item.status is defined and item.status == 200 %}
+          Device OMP Peers:
+          {% if item.json.data is defined %}
+          Total Peers for Device: {{ item.json.data | length }}
+          
+          {% for peer in item.json.data %}
+          Peer {{ loop.index }}:
+          - Peer Type: {{ peer['peer-type'] | default('N/A') }}
+            Peer System IP: {{ peer['peer'] | default('N/A') }}
+            Domain ID: {{ peer['domain-id'] | default('N/A') }}
+            Overlay ID: {{ peer['overlay-id'] | default('N/A') }}
+            State: {{ peer.state | default('N/A') }}
+            Admin State: {{ peer['admin-state'] | default('N/A') }}
+            Legit: {{ peer.legit | default('N/A') }}
+            Refresh: {{ peer.refresh | default('N/A') }}
+            Site of Origin: {{ peer['site-of-origin'] | default('N/A') }}
+            Region ID: {{ peer['region-id'] | default('N/A') }}
+            Role: {{ peer.role | default('N/A') }}
+            Up Time: {{ peer['up-time'] | default('N/A') }}
+            Hello Sent: {{ peer['hello-sent'] | default('N/A') }}
+            Hello Received: {{ peer['hello-received'] | default('N/A') }}
+            Handshake Sent: {{ peer['handshake-sent'] | default('N/A') }}
+            Handshake Received: {{ peer['handshake-received'] | default('N/A') }}
+            Alert Sent: {{ peer['alert-sent'] | default('N/A') }}
+            Alert Received: {{ peer['alert-received'] | default('N/A') }}
+            Inform Sent: {{ peer['inform-sent'] | default('N/A') }}
+            Inform Received: {{ peer['inform-received'] | default('N/A') }}
+            Update Sent: {{ peer['update-sent'] | default('N/A') }}
+            Update Received: {{ peer['update-received'] | default('N/A') }}
+            Route Refresh Sent: {{ peer['route-refresh-sent'] | default('N/A') }}
+            Route Refresh Received: {{ peer['route-refresh-received'] | default('N/A') }}
+            Keepalive Sent: {{ peer['keepalive-sent'] | default('N/A') }}
+            Keepalive Received: {{ peer['keepalive-received'] | default('N/A') }}
+          
+          {% endfor %}
+          {% else %}
+          No OMP peers data available for this device.
+          {% endif %}
+          {% else %}
+          Error Details:
+          Status Code: {{ item.status | default('N/A') }}
+          Error Message: {{ item.msg | default('Unknown error') }}
+          {% endif %}
+        dest: "{{ omp_dir }}/device_omp_peers_{{ item.item.hostname | default('unknown') | regex_replace('[^A-Za-z0-9_-]', '_') }}.txt"
+      loop: "{{ device_omp_peers.results | default([]) }}"
+      when: devices_available
+
+    - name: Create execution summary
+      copy:
+        content: |
+          SD-WAN OMP Peers Collection - Execution Summary
+          ==============================================
+          Execution Time: {{ ansible_date_time.iso8601 }}
+          vManage Host: {{ vmanage_host }}
+          vManage Connectivity: {{ 'Connected' if vmanage_connected else 'Connection Failed - HTTP ' + (connectivity_status|string) }}
+          
+          API Endpoint Results:
+          - Devices List: {{ 'SUCCESS' if devices_available else 'FAILED - HTTP ' + (devices_list.status|string) }}
+          - OMP Peers: {{ 'SUCCESS' if (omp_peers.status is defined and omp_peers.status == 200) else 'FAILED - HTTP ' + (omp_peers.status|string) }}
+          - OMP Summary: {{ 'SUCCESS' if (omp_summary.status is defined and omp_summary.status == 200) else 'FAILED - HTTP ' + (omp_summary.status|string) }}
+          - OMP Routes: {{ 'SUCCESS' if (omp_routes.status is defined and omp_routes.status == 200) else 'FAILED - HTTP ' + (omp_routes.status|string) }}
+          - OMP Advertised Routes: {{ 'SUCCESS' if (omp_advertised_routes.status is defined and omp_advertised_routes.status == 200) else 'FAILED - HTTP ' + (omp_advertised_routes.status|string) }}
+          - OMP Received Routes: {{ 'SUCCESS' if (omp_received_routes.status is defined and omp_received_routes.status == 200) else 'FAILED - HTTP ' + (omp_received_routes.status|string) }}
+          - Device-Specific OMP Peers: {{ (device_omp_peers.results | default([]) | length) if devices_available else 0 }} devices processed
+          
+          Total Devices Found: {{ devices_data | length if devices_available else 0 }}
+          Total OMP Peers: {{ omp_peers.json.data | length if (omp_peers.status is defined and omp_peers.status == 200) else 'N/A' }}
+          Total OMP Routes: {{ omp_routes.json.data | length if (omp_routes.status is defined and omp_routes.status == 200) else 'N/A' }}
+          
+          Files Created:
+          - devices_list.txt
+          - omp_peers.txt
+          - omp_summary.txt
+          - omp_routes.txt
+          - omp_advertised_routes.txt
+          - omp_received_routes.txt
+          {% if devices_available %}
+          {% for device in devices_data %}
+          - device_omp_peers_{{ device.hostname | default('unknown') | regex_replace('[^A-Za-z0-9_-]', '_') }}.txt
+          {% endfor %}
+          {% endif %}
+          
+          Directory Structure:
+          - Base Directory: {{ generated_dir }}
+          - OMP Data Directory: {{ omp_dir }}
+          
+          Playbook Execution: COMPLETED
+        dest: "{{ omp_dir }}/execution_summary.txt"
