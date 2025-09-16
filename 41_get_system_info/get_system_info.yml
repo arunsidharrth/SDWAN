@@ -1,1 +1,171 @@
+---
+- name: Get System Info - Retrieve system information
+  hosts: localhost
+  gather_facts: true
+  connection: local
+  
+  vars:
+    # Use environment variables for credentials
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    
+    # Directory structure - save results in generated/system_info subfolder
+    generated_dir: "{{ playbook_dir }}/../generated"
+    system_info_dir: "{{ generated_dir }}/system_info"
 
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+        - vmanage_port
+
+    - name: Create system info directory
+      file:
+        path: "{{ system_info_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Test vManage connectivity
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: connectivity_test
+
+    - name: Fail if connectivity test failed
+      fail:
+        msg: "Cannot connect to vManage at {{ vmanage_host }}"
+      when: connectivity_test.status != 200
+
+    # Only include endpoints that work successfully
+    - name: Get device system information
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/system/info"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: device_system_info
+
+    - name: Get system counters
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/counters"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: system_counters
+
+    - name: Get device models
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/models"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: device_models
+
+    - name: Get device controllers
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: device_controllers
+
+    - name: Get device vedges
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/vedges"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: device_vedges
+
+    # Save all results (these should all be successful)
+    - name: Save device system information to file
+      copy:
+        content: "{{ device_system_info.json | to_nice_json }}"
+        dest: "{{ system_info_dir }}/device_system_info.json"
+
+    - name: Save system counters to file
+      copy:
+        content: "{{ system_counters.json | to_nice_json }}"
+        dest: "{{ system_info_dir }}/system_counters.json"
+
+    - name: Save device models to file
+      copy:
+        content: "{{ device_models.json | to_nice_json }}"
+        dest: "{{ system_info_dir }}/device_models.json"
+
+    - name: Save device controllers to file
+      copy:
+        content: "{{ device_controllers.json | to_nice_json }}"
+        dest: "{{ system_info_dir }}/device_controllers.json"
+
+    - name: Save device vedges to file
+      copy:
+        content: "{{ device_vedges.json | to_nice_json }}"
+        dest: "{{ system_info_dir }}/device_vedges.json"
+
+    # Create summary of what was collected
+    - name: Create system info summary
+      copy:
+        content: |
+          System Information Collection Summary
+          ===================================
+          
+          Collection Date: {{ ansible_date_time.iso8601 }}
+          vManage Host: {{ vmanage_host }}
+          Username: {{ vmanage_username }}
+          
+          Successfully Retrieved System Information:
+          - Device System Info: SUCCESS
+          - System Counters: SUCCESS  
+          - Device Models: SUCCESS
+          - Device Controllers: SUCCESS
+          - Device vEdges: SUCCESS
+          
+          Files Generated:
+          - device_system_info.json
+          - system_counters.json
+          - device_models.json
+          - device_controllers.json
+          - device_vedges.json
+          
+          All endpoints completed successfully with no errors.
+        dest: "{{ system_info_dir }}/collection_summary.txt"
