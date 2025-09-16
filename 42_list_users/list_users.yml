@@ -1,1 +1,120 @@
+---
+- name: List Users - Get all users
+  hosts: localhost
+  gather_facts: true
+  connection: local
+  
+  vars:
+    # Use environment variables for credentials
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    
+    # Directory structure - save results in generated/users subfolder
+    generated_dir: "{{ playbook_dir }}/../generated"
+    users_dir: "{{ generated_dir }}/users"
 
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+        - vmanage_port
+
+    - name: Create users directory
+      file:
+        path: "{{ users_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Test vManage connectivity
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: connectivity_test
+
+    - name: Fail if connectivity test failed
+      fail:
+        msg: "Cannot connect to vManage at {{ vmanage_host }}"
+      when: connectivity_test.status != 200
+
+    # Get all users from vManage
+    - name: Get all users
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/admin/user"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: users_list
+
+    # Get user groups/roles information
+    - name: Get user groups
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/admin/usergroup"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: user_groups
+
+
+
+    # Save all users list
+    - name: Save users list to file
+      copy:
+        content: "{{ users_list.json | to_nice_json }}"
+        dest: "{{ users_dir }}/users_list.json"
+
+    # Save user groups
+    - name: Save user groups to file
+      copy:
+        content: "{{ user_groups.json | to_nice_json }}"
+        dest: "{{ users_dir }}/user_groups.json"
+
+
+
+    # Create summary of what was collected
+    - name: Create users collection summary
+      copy:
+        content: |
+          Users Information Collection Summary
+          ===================================
+          
+          Collection Date: {{ ansible_date_time.iso8601 }}
+          vManage Host: {{ vmanage_host }}
+          Username: {{ vmanage_username }}
+          
+          Successfully Retrieved User Information:
+          - Users List: SUCCESS
+          - User Groups: SUCCESS
+          
+          Files Generated:
+          - users_list.json
+          - user_groups.json
+          
+          Total Users Found: {{ users_list.json.data | length if users_list.json.data is defined else 'N/A' }}
+          Total User Groups: {{ user_groups.json.data | length if user_groups.json.data is defined else 'N/A' }}
+          
+          All endpoints completed successfully with no errors.
+        dest: "{{ users_dir }}/collection_summary.txt"
