@@ -1,1 +1,273 @@
+---
+- name: SD-WAN Get Control Connections - Use Case 40
+  hosts: localhost
+  gather_facts: true
+  connection: local
+  
+  vars:
+    # Use environment variables for credentials
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    
+    # Generated directory structure
+    generated_dir: "{{ playbook_dir }}/../generated"
+    control_connections_dir: "{{ generated_dir }}/control_connections"
 
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+        - vmanage_port
+
+    - name: Create generated directory structure
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ generated_dir }}"
+        - "{{ control_connections_dir }}"
+
+    - name: Test vManage connectivity
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 30
+        headers:
+          Content-Type: "application/json"
+      register: connectivity_test
+      ignore_errors: true
+
+    - name: Fail if connectivity test failed
+      fail:
+        msg: "Cannot connect to vManage at {{ vmanage_host }}"
+      when: connectivity_test.status is not defined or connectivity_test.status != 200
+
+    - name: Get all devices to collect control connection data
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: all_devices
+      ignore_errors: true
+      failed_when: false
+      no_log: true
+
+    - name: Save all devices list
+      copy:
+        content: "{{ all_devices.json | to_nice_json }}"
+        dest: "{{ control_connections_dir }}/all_devices.json"
+      when: all_devices.status is defined and all_devices.status == 200
+
+    - name: Get control connections summary
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/control/connections"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: control_connections
+      ignore_errors: true
+      failed_when: false
+      no_log: true
+
+    - name: Save control connections summary
+      copy:
+        content: "{{ control_connections.json | to_nice_json }}"
+        dest: "{{ control_connections_dir }}/control_connections_summary.json"
+      when: control_connections.status is defined and control_connections.status == 200
+
+    - name: Get control connections statistics
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/statistics/control/connections"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: control_stats
+      ignore_errors: true
+      failed_when: false
+      no_log: true
+
+    - name: Save control connections statistics
+      copy:
+        content: "{{ control_stats.json | to_nice_json }}"
+        dest: "{{ control_connections_dir }}/control_connections_statistics.json"
+      when: control_stats.status is defined and control_stats.status == 200
+
+    - name: Get OMP peers (related to control connections)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/omp/peers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: omp_peers
+      ignore_errors: true
+      failed_when: false
+      no_log: true
+
+    - name: Save OMP peers data
+      copy:
+        content: "{{ omp_peers.json | to_nice_json }}"
+        dest: "{{ control_connections_dir }}/omp_peers.json"
+      when: omp_peers.status is defined and omp_peers.status == 200
+
+    - name: Get BFD sessions (related to control connections)
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/bfd/sessions"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: bfd_sessions
+      ignore_errors: true
+      failed_when: false
+      no_log: true
+
+    - name: Save BFD sessions data
+      copy:
+        content: "{{ bfd_sessions.json | to_nice_json }}"
+        dest: "{{ control_connections_dir }}/bfd_sessions.json"
+      when: bfd_sessions.status is defined and bfd_sessions.status == 200
+
+    - name: Get system info for controllers
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: controllers_info
+      ignore_errors: true
+      failed_when: false
+      no_log: true
+
+    - name: Save controllers system info
+      copy:
+        content: "{{ controllers_info.json | to_nice_json }}"
+        dest: "{{ control_connections_dir }}/controllers_info.json"
+      when: controllers_info.status is defined and controllers_info.status == 200
+
+    - name: Extract device system IPs for detailed control connection queries
+      set_fact:
+        device_system_ips: "{{ all_devices.json.data | selectattr('deviceType', 'defined') | map(attribute='system-ip') | list }}"
+      when: all_devices.status is defined and all_devices.status == 200
+
+    - name: Get detailed control connections for each device
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/control/connections?deviceId={{ item }}"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 30
+        headers:
+          Content-Type: "application/json"
+      register: device_control_connections
+      ignore_errors: true
+      failed_when: false
+      no_log: true
+      loop: "{{ device_system_ips | default([]) }}"
+      when: device_system_ips is defined and device_system_ips | length > 0
+
+    - name: Save detailed control connections per device
+      copy:
+        content: "{{ item.json | to_nice_json }}"
+        dest: "{{ control_connections_dir }}/control_connections_{{ item.item }}.json"
+      loop: "{{ device_control_connections.results | default([]) }}"
+      when: 
+        - item.status is defined
+        - item.status == 200
+        - item.json is defined
+
+    - name: Create execution summary
+      copy:
+        content: |
+          SD-WAN Control Connections Retrieval Summary
+          ==========================================
+          
+          Execution Time: {{ ansible_date_time.iso8601 }}
+          vManage Host: {{ vmanage_host }}
+          Username: {{ vmanage_username }}
+          
+          API Endpoints Status:
+          - All Devices: {{ 'SUCCESS' if all_devices.status == 200 else 'FAILED (' + (all_devices.status | string) + ')' if all_devices.status is defined else 'FAILED (No Response)' }}
+          - Control Connections Summary: {{ 'SUCCESS' if control_connections.status == 200 else 'FAILED (' + (control_connections.status | string) + ')' if control_connections.status is defined else 'FAILED (No Response)' }}
+          - Control Statistics: {{ 'SUCCESS' if control_stats.status == 200 else 'FAILED (' + (control_stats.status | string) + ')' if control_stats.status is defined else 'FAILED (No Response)' }}
+          - OMP Peers: {{ 'SUCCESS' if omp_peers.status == 200 else 'FAILED (' + (omp_peers.status | string) + ')' if omp_peers.status is defined else 'FAILED (No Response)' }}
+          - BFD Sessions: {{ 'SUCCESS' if bfd_sessions.status == 200 else 'FAILED (' + (bfd_sessions.status | string) + ')' if bfd_sessions.status is defined else 'FAILED (No Response)' }}
+          - Controllers Info: {{ 'SUCCESS' if controllers_info.status == 200 else 'FAILED (' + (controllers_info.status | string) + ')' if controllers_info.status is defined else 'FAILED (No Response)' }}
+          
+          Files Generated:
+          {% if all_devices.status == 200 -%}
+          - all_devices.json
+          {% endif -%}
+          {% if control_connections.status == 200 -%}
+          - control_connections_summary.json
+          {% endif -%}
+          {% if control_stats.status == 200 -%}
+          - control_connections_statistics.json
+          {% endif -%}
+          {% if omp_peers.status == 200 -%}
+          - omp_peers.json
+          {% endif -%}
+          {% if bfd_sessions.status == 200 -%}
+          - bfd_sessions.json
+          {% endif -%}
+          {% if controllers_info.status == 200 -%}
+          - controllers_info.json
+          {% endif -%}
+          {% if device_control_connections is defined -%}
+          {% for result in device_control_connections.results -%}
+          {% if result.status == 200 -%}
+          - control_connections_{{ result.item }}.json
+          {% endif -%}
+          {% endfor -%}
+          {% endif %}
+          
+          Total Devices Found: {{ (all_devices.json.data | length) if (all_devices.status == 200 and all_devices.json.data is defined) else 'N/A' }}
+          
+          Notes:
+          - All files are saved in: {{ control_connections_dir }}
+          - HTTP 503 errors are expected in sandbox environments
+          - Only successful API responses generate output files
+        dest: "{{ control_connections_dir }}/execution_summary.txt"
