@@ -1,1 +1,257 @@
+---
+- name: SD-WAN Get System Info - Use Case 41
+  hosts: localhost
+  gather_facts: true
+  connection: local
+  
+  vars:
+    # Use environment variables for credentials
+    vmanage_host: "{{ lookup('env', 'VMANAGE_HOST') | default('vmanage-amfament-prod.sdwan.cisco.com') }}"
+    vmanage_username: "{{ lookup('env', 'VMANAGE_USERNAME') | default('automation') }}"
+    vmanage_password: "{{ lookup('env', 'VMANAGE_PASSWORD') | default('') }}"
+    vmanage_port: "443"
+    
+    # Generated directory structure
+    generated_dir: "{{ playbook_dir }}/../generated"
+    system_info_dir: "{{ generated_dir }}/system_info"
 
+  tasks:
+    - name: Validate environment variables are set
+      fail:
+        msg: "Required environment variable {{ item }} is not set"
+      when: vars[item] == ""
+      loop:
+        - vmanage_host
+        - vmanage_username
+        - vmanage_password
+        - vmanage_port
+
+    - name: Create generated directory structure
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ generated_dir }}"
+        - "{{ system_info_dir }}"
+
+    - name: Test vManage connectivity
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 30
+        headers:
+          Content-Type: "application/json"
+      register: connectivity_test
+      ignore_errors: true
+
+    - name: Fail if connectivity test failed
+      fail:
+        msg: "Cannot connect to vManage at {{ vmanage_host }}"
+      when: connectivity_test.status is not defined or connectivity_test.status != 200
+
+    - name: Get device system information
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/system/info"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: device_system_info
+      ignore_errors: true
+      failed_when: false
+      no_log: true
+
+    - name: Save device system information
+      copy:
+        content: "{{ device_system_info.json | to_nice_json }}"
+        dest: "{{ system_info_dir }}/device_system_info.json"
+      when: device_system_info.status is defined and device_system_info.status == 200
+
+    - name: Get system counters
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/counters"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: system_counters
+      ignore_errors: true
+      failed_when: false
+      no_log: true
+
+    - name: Save system counters
+      copy:
+        content: "{{ system_counters.json | to_nice_json }}"
+        dest: "{{ system_info_dir }}/system_counters.json"
+      when: system_counters.status is defined and system_counters.status == 200
+
+    - name: Get device models
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/models"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: device_models
+      ignore_errors: true
+      failed_when: false
+      no_log: true
+
+    - name: Save device models
+      copy:
+        content: "{{ device_models.json | to_nice_json }}"
+        dest: "{{ system_info_dir }}/device_models.json"
+      when: device_models.status is defined and device_models.status == 200
+
+    - name: Get device controllers
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/controllers"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: device_controllers
+      ignore_errors: true
+      failed_when: false
+      no_log: true
+
+    - name: Save device controllers
+      copy:
+        content: "{{ device_controllers.json | to_nice_json }}"
+        dest: "{{ system_info_dir }}/device_controllers.json"
+      when: device_controllers.status is defined and device_controllers.status == 200
+
+    - name: Get device vedges
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/vedges"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: device_vedges
+      ignore_errors: true
+      failed_when: false
+      no_log: true
+
+    - name: Save device vedges
+      copy:
+        content: "{{ device_vedges.json | to_nice_json }}"
+        dest: "{{ system_info_dir }}/device_vedges.json"
+      when: device_vedges.status is defined and device_vedges.status == 200
+
+    - name: Get system status
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/system/device/status"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: system_status
+      ignore_errors: true
+      failed_when: false
+      no_log: true
+
+    - name: Save system status
+      copy:
+        content: "{{ system_status.json | to_nice_json }}"
+        dest: "{{ system_info_dir }}/system_status.json"
+      when: system_status.status is defined and system_status.status == 200
+
+    - name: Get system hardware information
+      uri:
+        url: "https://{{ vmanage_host }}/dataservice/device/hardware"
+        method: GET
+        user: "{{ vmanage_username }}"
+        password: "{{ vmanage_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        timeout: 60
+        headers:
+          Content-Type: "application/json"
+      register: hardware_info
+      ignore_errors: true
+      failed_when: false
+      no_log: true
+
+    - name: Save hardware information
+      copy:
+        content: "{{ hardware_info.json | to_nice_json }}"
+        dest: "{{ system_info_dir }}/hardware_info.json"
+      when: hardware_info.status is defined and hardware_info.status == 200
+
+    - name: Create system info summary
+      copy:
+        content: |
+          SD-WAN System Information Collection Summary
+          ==========================================
+          
+          Execution Time: {{ ansible_date_time.iso8601 }}
+          vManage Host: {{ vmanage_host }}
+          Username: {{ vmanage_username }}
+          
+          API Endpoints Status:
+          - Device System Info: {{ 'SUCCESS' if device_system_info.status == 200 else 'FAILED (' + (device_system_info.status | string) + ')' if device_system_info.status is defined else 'FAILED (No Response)' }}
+          - System Counters: {{ 'SUCCESS' if system_counters.status == 200 else 'FAILED (' + (system_counters.status | string) + ')' if system_counters.status is defined else 'FAILED (No Response)' }}
+          - Device Models: {{ 'SUCCESS' if device_models.status == 200 else 'FAILED (' + (device_models.status | string) + ')' if device_models.status is defined else 'FAILED (No Response)' }}
+          - Device Controllers: {{ 'SUCCESS' if device_controllers.status == 200 else 'FAILED (' + (device_controllers.status | string) + ')' if device_controllers.status is defined else 'FAILED (No Response)' }}
+          - Device vEdges: {{ 'SUCCESS' if device_vedges.status == 200 else 'FAILED (' + (device_vedges.status | string) + ')' if device_vedges.status is defined else 'FAILED (No Response)' }}
+          - System Status: {{ 'SUCCESS' if system_status.status == 200 else 'FAILED (' + (system_status.status | string) + ')' if system_status.status is defined else 'FAILED (No Response)' }}
+          - Hardware Info: {{ 'SUCCESS' if hardware_info.status == 200 else 'FAILED (' + (hardware_info.status | string) + ')' if hardware_info.status is defined else 'FAILED (No Response)' }}
+          
+          Files Generated:
+          {% if device_system_info.status == 200 -%}
+          - device_system_info.json
+          {% endif -%}
+          {% if system_counters.status == 200 -%}
+          - system_counters.json
+          {% endif -%}
+          {% if device_models.status == 200 -%}
+          - device_models.json
+          {% endif -%}
+          {% if device_controllers.status == 200 -%}
+          - device_controllers.json
+          {% endif -%}
+          {% if device_vedges.status == 200 -%}
+          - device_vedges.json
+          {% endif -%}
+          {% if system_status.status == 200 -%}
+          - system_status.json
+          {% endif -%}
+          {% if hardware_info.status == 200 -%}
+          - hardware_info.json
+          {% endif %}
+          
+          Notes:
+          - All files are saved in: {{ system_info_dir }}
+          - Only successful API responses generate output files
+          - HTTP 503 errors are expected in sandbox environments
+        dest: "{{ system_info_dir }}/execution_summary.txt"
